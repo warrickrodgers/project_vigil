@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Outlet {
+  id              String    @id @default(cuid())
+  canonicalName   String    @unique // "Reuters", "KC Star", "SCMP"
+  aliases         String // JSON-encoded string[] of known variant names
+  biasAnchor      Float // -1.0 to 1.0, seed value from AllSides/Ad Fontes
+  reliabilityBase Float // 0.0-1.0, baseline trust (separate from per-article trustRating)
+  region          String? // optional primary region, nullable (Reuters is global)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  articles Article[]
+
+  @@index([canonicalName])
+}
+
+model Article {
+  id               String    @id @default(cuid())
+  url              String    @unique
+  hash             String    @unique // sha256 of normalized(title)+"\n"+normalized(rawContent), for wire-story dedup
+  title            String
+  summary          String
+  rawContent       String? // full fetched body; null if fetch failed
+  outletId         String
+  outlet           Outlet    @relation(fields: [outletId], references: [id])
+  biasScore        Float // -1.0 (left) to 1.0 (right), 0 = center
+  trustRating      Float // 0.0–1.0, derived from outlet.reliabilityBase + bias + corroboration
+  region           String // "local" | "usa" | "geopolitical"
+  sectorTags       String // JSON-encoded string[] (SQLite has no native arrays)
+  corroboratedById String? // FK → Article.id, nullable
+  corroboratedBy   Article?  @relation("Corroboration", fields: [corroboratedById], references: [id])
+  corroborates     Article[] @relation("Corroboration")
+  embeddingId      String? // ChromaDB pointer, Phase 2
+  publishedAt      DateTime
+  collectedAt      DateTime  @default(now())
+
+  @@index([region, collectedAt])
+  @@index([outletId])
+  @@index([publishedAt])
+}

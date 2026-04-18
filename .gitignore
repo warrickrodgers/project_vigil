@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.db
+*.db-journal
+.env
+packages/db/.env
+.DS_Store
+
+# Prisma
+packages/db/prisma/migrations/
+
+# TypeScript
+*.tsbuildinfo
