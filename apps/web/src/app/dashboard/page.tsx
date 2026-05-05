@@ -1,12 +1,11 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { currentUser } from '@clerk/nextjs/server';
 import { prisma } from '@vigil/db';
 
 export const metadata: Metadata = { title: 'Dashboard — Project Vigil' };
 
 const TIER_LABELS: Record<string, string> = {
-  free: 'Free',
+  free: 'Free — Pre-Alpha',
   pro: 'Pro',
   regional_pro: 'Regional Pro',
   enterprise: 'Enterprise',
@@ -28,7 +27,7 @@ export default async function DashboardPage() {
     : null;
 
   const firstName = user?.firstName ?? 'there';
-  const tier = subscriber?.tier ?? null;
+  const tier = subscriber?.tier ?? 'free';
   const active = subscriber?.active ?? false;
 
   return (
@@ -43,60 +42,42 @@ export default async function DashboardPage() {
           {subscriber && active ? (
             <>
               <div className="dashboard-grid">
-                {/* Subscription card */}
                 <div className="dashboard-card">
                   <h3>Subscription</h3>
                   <div className={`tier-badge ${tier === 'free' ? 'free' : ''}`}>
-                    {TIER_LABELS[tier ?? 'free'] ?? tier}
+                    {TIER_LABELS[tier] ?? tier}
                   </div>
-                  <div className="status-row">
+                  <div className="status-row" style={{ marginTop: '0.75rem' }}>
                     <span className="status-dot" />
                     <span>Active</span>
                   </div>
                 </div>
 
-                {/* Delivery card */}
                 <div className="dashboard-card">
                   <h3>Delivery</h3>
                   <p style={{ fontSize: '0.9rem', color: '#b0b0c8', marginBottom: '0.5rem' }}>
-                    {CADENCE[tier ?? 'free']}
+                    {CADENCE[tier]}
                   </p>
                   <p style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
                     Delivered to {email}
                   </p>
                 </div>
-
-                {/* Upgrade card (only for free tier) */}
-                {tier === 'free' && (
-                  <div className="dashboard-card">
-                    <h3>Upgrade</h3>
-                    <p style={{ fontSize: '0.875rem', color: '#b0b0c8', marginBottom: '1rem', lineHeight: 1.5 }}>
-                      Get the full daily brief, analyst assessment, and corroboration indicators.
-                    </p>
-                    <Link href="/pricing" className="pricing-cta pricing-cta-primary" style={{ display: 'inline-block' }}>
-                      View Pro plans →
-                    </Link>
-                  </div>
-                )}
               </div>
 
-              {/* Newsletter archive placeholder */}
-              <div className="dashboard-card" style={{ marginTop: '1rem' }}>
+              <div className="dashboard-card" style={{ marginTop: '1.25rem' }}>
                 <h3>Recent Briefs</h3>
-                <p style={{ fontSize: '0.875rem', color: 'var(--muted)', marginTop: '0.5rem' }}>
-                  Newsletter archive coming soon. Briefs are delivered directly to your inbox.
+                <p style={{ fontSize: '0.875rem', color: 'var(--muted)', marginTop: '0.5rem', lineHeight: 1.6 }}>
+                  Brief archive coming soon. Each edition is delivered directly to your inbox at 6am CT.
                 </p>
               </div>
             </>
           ) : (
-            /* Not a subscriber yet */
             <div className="upgrade-prompt">
-              <h2>You&apos;re not subscribed yet.</h2>
+              <h2>You&apos;re on the list.</h2>
               <p>
-                Pick a plan to start receiving your daily intelligence brief. Free weekly digest
-                available — no credit card required.
+                You&apos;ll receive an email when your pre-alpha access is activated.
+                Briefs go out Sunday mornings at 6am CT.
               </p>
-              <Link href="/pricing" className="btn-primary">View plans →</Link>
             </div>
           )}
         </div>

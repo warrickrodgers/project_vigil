@@ -23,7 +23,7 @@ export function Nav() {
               <Link href="/sign-up" className="nav-cta">Get early access</Link>
             </SignedOut>
             <SignedIn>
-              <Link href="/dashboard" className="nav-link">Dashboard</Link>
+              {/* Dashboard link archived until subscriber portal is ready */}
               <UserButton />
             </SignedIn>
           </ClerkLoaded>
