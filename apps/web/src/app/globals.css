@@ -111,8 +111,11 @@ nav {
 .nav-link {
   color: var(--muted);
   text-decoration: none;
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   font-weight: 500;
+  font-family: 'Roboto Mono', 'Courier New', monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   transition: color 0.2s;
 }
 .nav-link:hover { color: var(--light); }
@@ -127,8 +130,11 @@ nav {
   text-decoration: none;
   padding: 0.55rem 1.25rem;
   border-radius: 8px;
-  font-size: 0.875rem;
+  font-size: 0.7rem;
   font-weight: 500;
+  font-family: 'Roboto Mono', 'Courier New', monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   transition: background 0.2s, box-shadow 0.2s;
 }
 .nav-cta:hover {
@@ -166,6 +172,14 @@ nav {
   color: var(--light);
 }
 
+.hero-h1-mono {
+  font-family: 'Roboto Mono', 'Courier New', monospace;
+  font-size: clamp(1.9rem, 4.2vw, 3.2rem);
+  font-weight: 600;
+  line-height: 1.18;
+  letter-spacing: -0.01em;
+}
+
 .hero h1 em {
   font-style: italic;
   color: var(--accent);
@@ -194,8 +208,11 @@ nav {
   text-decoration: none;
   padding: 0.9rem 2rem;
   border-radius: 8px;
-  font-size: 1rem;
+  font-size: 0.8rem;
   font-weight: 500;
+  font-family: 'Roboto Mono', 'Courier New', monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   box-shadow: 0 0 24px rgba(79, 142, 247, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.15);
   transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
 }
@@ -206,9 +223,12 @@ nav {
 }
 
 .hero-note {
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   color: var(--muted);
   text-decoration: none;
+  font-family: 'Roboto Mono', 'Courier New', monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   transition: color 0.2s;
 }
 .hero-note:hover { color: var(--light); }
@@ -478,8 +498,11 @@ nav {
   text-align: center;
   padding: 0.75rem 1.5rem;
   border-radius: 10px;
-  font-size: 0.875rem;
+  font-size: 0.7rem;
   font-weight: 500;
+  font-family: 'Roboto Mono', 'Courier New', monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   text-decoration: none;
   transition: all 0.2s;
 }
@@ -554,9 +577,11 @@ nav {
 }
 
 .cta-meta {
-  font-size: 0.85rem;
+  font-size: 0.7rem;
   color: var(--muted);
   margin-top: 0.85rem;
+  font-family: 'Roboto Mono', 'Courier New', monospace;
+  letter-spacing: 0.06em;
 }
 
 /* ── DASHBOARD ───────────────────────────── */
@@ -704,7 +729,10 @@ footer {
 footer a {
   color: var(--muted);
   text-decoration: none;
-  font-size: 0.875rem;
+  font-size: 0.7rem;
+  font-family: 'Roboto Mono', 'Courier New', monospace;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   transition: color 0.2s;
 }
 footer a:hover { color: var(--light); }

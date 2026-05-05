@@ -43,7 +43,7 @@ export default function LandingPage() {
       <section className="hero">
         <div className="page-wrap">
           <span className="hero-eyebrow">Open Source Intelligence</span>
-          <h1>
+          <h1 className="hero-h1-mono">
             Know before the <em>crowd</em> does.
           </h1>
           <p>
@@ -51,8 +51,7 @@ export default function LandingPage() {
             Delivered to your inbox at 6am CT every morning.
           </p>
           <div className="hero-actions">
-            <Link href="/sign-up" className="btn-primary">Start free →</Link>
-            <Link href="/pricing" className="hero-note">View pricing</Link>
+            <Link href="/sign-up" className="btn-primary">Request early access →</Link>
           </div>
         </div>
       </section>
@@ -68,6 +67,19 @@ export default function LandingPage() {
           </div>
         </div>
       </div>
+
+      {/* NEWSLETTER PREVIEW */}
+      <section className="section" style={{ paddingTop: '3rem', paddingBottom: '4rem' }}>
+        <div className="page-wrap">
+          <p className="section-label">What Arrives in Your Inbox</p>
+          <h2>The actual brief — not a mockup</h2>
+          <p className="section-intro" style={{ marginBottom: '2.5rem' }}>
+            Bias scores, trust ratings, and analyst assessments included for every story.
+            This is a live render of an actual collected brief.
+          </p>
+          <NewsletterPreview />
+        </div>
+      </section>
 
       {/* HOW IT WORKS */}
       <section className="section">
@@ -111,19 +123,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* NEWSLETTER PREVIEW */}
-      <section className="section" style={{ paddingTop: '2rem', paddingBottom: '4rem' }}>
-        <div className="page-wrap">
-          <p className="section-label">What Arrives in Your Inbox</p>
-          <h2>The actual brief — not a mockup</h2>
-          <p className="section-intro" style={{ marginBottom: '2.5rem' }}>
-            Bias scores, trust ratings, and analyst assessments included for every story.
-            This is a live render of an actual collected brief.
-          </p>
-          <NewsletterPreview />
-        </div>
-      </section>
-
       {/* FEATURES */}
       <section
         className="section"
@@ -151,13 +150,12 @@ export default function LandingPage() {
       <section className="cta-section">
         <div className="page-wrap">
           <div className="cta-inner">
-            <p className="section-label">Get Started</p>
-            <h2>Your first brief is free.</h2>
+            <p className="section-label">Early Access</p>
+            <h2>Pre-alpha — limited spots.</h2>
             <p>
-              Weekly digest, no credit card required. Upgrade to daily Pro when you&apos;re ready.
+              Sign up for free while we validate with an early cohort. No credit card required.
             </p>
-            <Link href="/sign-up" className="btn-primary">Create free account →</Link>
-            <p className="cta-meta">Free weekly · Pro daily at $4.99/mo</p>
+            <Link href="/sign-up" className="btn-primary">Request early access →</Link>
           </div>
         </div>
       </section>
