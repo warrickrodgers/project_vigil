@@ -1,0 +1,24 @@
+node_modules/
+dist/
+*.db
+*.db-journal
+.env
+*.env
+packages/db/.env
+.DS_Store
+
+# CDK — generated outputs and bundles (never commit, re-generated on synth/deploy)
+cdk.out/
+infra/cdk.out/
+*.cdk_synth_output.log
+cdk_synth_output.log
+
+# Runtime data (telemetry, budget — local state, not committed)
+data/
+
+# TypeScript
+*.tsbuildinfo
+
+# Next.js build output and cache
+.next/
+apps/web/.next/

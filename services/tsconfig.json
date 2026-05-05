@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "..",
+    "paths": {
+      "@vigil/shared": ["../packages/shared/src/index.ts"],
+      "@vigil/clients": ["../packages/clients/src/index.ts"],
+      "@vigil/agents": ["../packages/agents/src/index.ts"],
+      "@vigil/db": ["../packages/db/src/index.ts"]
+    }
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

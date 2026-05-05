@@ -1,0 +1,31 @@
+{
+  "name": "@vigil/agents",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vigil/shared": "*",
+    "@vigil/db": "*",
+    "@vigil/clients": "*",
+    "@vigil/discord": "*",
+    "discord.js": "^14.16.3",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
+  }
+}

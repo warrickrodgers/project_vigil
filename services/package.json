@@ -1,0 +1,23 @@
+{
+  "name": "@vigil/services",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/collector.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sesv2": "^3.1041.0",
+    "@vigil/agents": "*",
+    "@vigil/clients": "*",
+    "@vigil/db": "*",
+    "@vigil/shared": "*"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.161",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.7.3"
+  }
+}

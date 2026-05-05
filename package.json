@@ -1,0 +1,41 @@
+{
+  "name": "project-vigil",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "services",
+    "infra"
+  ],
+  "scripts": {
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose down",
+    "db:generate": "npm run generate -w packages/db",
+    "db:migrate": "npm run migrate -w packages/db",
+    "db:studio": "npm run studio -w packages/db",
+    "db:seed": "cross-env NODE_ENV=development tsx scripts/seed.ts",
+    "bot:dev": "cross-env NODE_ENV=development npx tsx scripts/run-bot.ts",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint packages --ext .ts",
+    "test": "vitest run",
+    "web:dev": "npm run dev -w apps/web",
+    "web:build": "npm run build -w apps/web",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "cross-env": "^10.1.0",
+    "dotenv": "^16.4.7",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
+  }
+}
