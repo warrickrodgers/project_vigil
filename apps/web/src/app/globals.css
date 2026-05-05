@@ -172,7 +172,7 @@ nav {
   color: var(--light);
 }
 
-.hero-h1-mono {
+.hero h1.hero-h1-mono {
   font-family: 'Roboto Mono', 'Courier New', monospace;
   font-size: clamp(1.9rem, 4.2vw, 3.2rem);
   font-weight: 600;
