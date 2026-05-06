@@ -1,10 +1,11 @@
 import { EmbedBuilder } from 'discord.js';
 import type { ArticleForEmbed } from '../types.js';
+import { deriveConfidence } from '@vigil/shared';
 
 function priorityColor(trustRating: number): number {
-  if (trustRating < 0.4) return 0xe74c3c; // red — HIGH priority (low trust)
-  if (trustRating < 0.7) return 0xf39c12; // amber — MEDIUM
-  return 0x2ecc71; // green — LOW priority (high trust)
+  if (trustRating < 0.4) return 0xe74c3c; // red
+  if (trustRating < 0.7) return 0xf39c12; // amber
+  return 0x2ecc71;                         // green
 }
 
 function biasLabel(score: number): string {
@@ -28,8 +29,22 @@ const FLAG_LABELS: Record<string, string> = {
   UNKNOWN_OUTLET: '❓ UNKNOWN OUTLET',
 };
 
+const CONFIDENCE_BADGES: Record<string, string> = {
+  HIGH: '🟢 HIGH',
+  MODERATE: '🟡 MODERATE',
+  LOW: '🔴 LOW',
+};
+
 export function formatIntelEmbed(article: ArticleForEmbed, outletName: string): EmbedBuilder {
   const flagLabel = article.vettingFlag ? FLAG_LABELS[article.vettingFlag] ?? article.vettingFlag : null;
+
+  // Derive confidence from available trust data; outletKnown approximated from trust
+  const isCorroborated = 'isCorroborated' in article
+    ? (article as ArticleForEmbed & { isCorroborated?: boolean }).isCorroborated ?? false
+    : false;
+  const outletKnown = article.trustRating > 0.3; // provisional heuristic
+  const confidence = deriveConfidence(article.trustRating, isCorroborated, outletKnown);
+  const confidenceBadge = CONFIDENCE_BADGES[confidence] ?? CONFIDENCE_BADGES['MODERATE']!;
 
   const embed = new EmbedBuilder()
     .setColor(priorityColor(article.trustRating))
@@ -43,6 +58,7 @@ export function formatIntelEmbed(article: ArticleForEmbed, outletName: string): 
         inline: true,
       },
       { name: 'Trust Rating', value: trustBar(article.trustRating), inline: true },
+      { name: 'Confidence', value: confidenceBadge, inline: true },
       { name: 'Summary', value: article.summary },
     )
     .setFooter({
@@ -58,4 +74,27 @@ export function formatIntelEmbed(article: ArticleForEmbed, outletName: string): 
   }
 
   return embed;
+}
+
+/**
+ * NOMINAL variant — sent when a sector has no new developments.
+ */
+export function formatNominalEmbed(region: string, lastCollectionAt?: Date): EmbedBuilder {
+  const regionLabel = region.toUpperCase();
+  const lastCollection = lastCollectionAt
+    ? lastCollectionAt.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'America/Chicago',
+        timeZoneName: 'short',
+      })
+    : 'Unknown';
+
+  return new EmbedBuilder()
+    .setColor(0x444455)
+    .setTitle(`📊 ${regionLabel} — NOMINAL`)
+    .setDescription(
+      `No new developments in the last 18 hours.\nMonitoring continues. Last collection: ${lastCollection}.`,
+    )
+    .setFooter({ text: 'Vigil is watching.' });
 }

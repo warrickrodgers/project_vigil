@@ -16,6 +16,12 @@ const MONO = `'Roboto Mono','Courier New',monospace`;
 const BODY = `'Roboto Slab',Georgia,'Times New Roman',serif`;
 const SUB  = `'Roboto Serif',Georgia,'Times New Roman',serif`;
 
+const CONFIDENCE_COLORS: Record<string, string> = {
+  HIGH: '#22c55e',
+  MODERATE: '#eab308',
+  LOW: '#ef4444',
+};
+
 function trustBreakdown(a: import('./types.js').RankedArticle): string {
   const outlet = Math.round(a.outletReliabilityBase * 100);
   const biasPenalty = Math.round(Math.abs(a.biasScore) * 0.3 * 100);
@@ -46,7 +52,78 @@ function biasBar(avg: number): string {
   return Array.from({ length: 11 }, (_, i) => (i === pos ? '▼' : '─')).join('');
 }
 
+function renderNominalSection(section: DigestSection): string {
+  const color = SECTION_COLORS[section.region] ?? '#4f8ef7';
+  const label = SECTION_LABELS[section.region] ?? section.region.toUpperCase();
+  const lastCollection = section.lastCollectionAt
+    ? new Date(section.lastCollectionAt).toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'America/Chicago',
+        timeZoneName: 'short',
+      })
+    : 'Unknown';
+
+  return `
+  <tr>
+    <td style="padding:0;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+        <tr>
+          <td style="background:${color};padding:8px 40px;">
+            <p style="margin:0;font-size:10px;color:rgba(255,255,255,0.85);font-family:${MONO};letter-spacing:2px;text-transform:uppercase;">Intel Report</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:20px 40px 6px;background:#1a1a2e;">
+            <h2 style="margin:0 0 4px;font-size:14px;font-weight:600;color:${color};letter-spacing:2px;font-family:${MONO};text-transform:uppercase;">${label}</h2>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:12px 40px 22px;background:#1a1a2e;border-left:3px solid #333;">
+            <p style="margin:0;font-family:${MONO};font-size:13px;color:#555;letter-spacing:2px;">
+              ▬▬▬ NO NEW DEVELOPMENTS — ${section.region.toUpperCase()} NOMINAL ▬▬▬
+            </p>
+            <p style="margin:8px 0 0;font-family:${MONO};font-size:11px;color:#444;">
+              Monitoring continues. Last collection: ${lastCollection}.
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>`;
+}
+
+function renderStructuredAssessmentHtml(
+  assessment: import('@vigil/shared').StructuredAssessment,
+  color: string,
+): string {
+  const confColor = CONFIDENCE_COLORS[assessment.confidence] ?? '#eab308';
+  const watchItems = assessment.watchList
+    .map((w) => `▸ ${w}`)
+    .join('<br>\n            ');
+
+  return `
+            <div style="background:#0d0d0d;border-left:3px solid ${color};padding:16px 20px;border-radius:0 4px 4px 0;">
+              <p style="margin:0 0 4px;font-size:10px;color:#666;font-family:${MONO};letter-spacing:2px;text-transform:uppercase;">Situation</p>
+              <p style="margin:0 0 12px;font-size:13px;color:#ccc;line-height:1.6;font-family:${BODY};font-weight:300;">${assessment.situation}</p>
+
+              <p style="margin:0 0 4px;font-size:10px;color:#666;font-family:${MONO};letter-spacing:2px;text-transform:uppercase;">Assessment</p>
+              <p style="margin:0 0 12px;font-size:13px;color:#e8e8e8;line-height:1.6;font-family:${BODY};font-weight:300;">${assessment.assessment}</p>
+
+              <p style="margin:0 0 4px;font-size:10px;color:#666;font-family:${MONO};letter-spacing:2px;text-transform:uppercase;">Confidence</p>
+              <p style="margin:0 0 12px;font-size:13px;color:${confColor};line-height:1.6;font-family:${MONO};">${assessment.confidence} — ${assessment.confidenceReasoning}</p>
+
+              <p style="margin:0 0 4px;font-size:10px;color:#666;font-family:${MONO};letter-spacing:2px;text-transform:uppercase;">Implications</p>
+              <p style="margin:0 0 12px;font-size:13px;color:#c9a227;line-height:1.6;font-family:${BODY};font-weight:300;">${assessment.implications}</p>
+
+              <p style="margin:0 0 4px;font-size:10px;color:#666;font-family:${MONO};letter-spacing:2px;text-transform:uppercase;">Watch List</p>
+              <p style="margin:0;font-size:12px;color:#aaa;line-height:1.8;font-family:${MONO};">${watchItems}</p>
+            </div>`;
+}
+
 function renderSectionHtml(section: DigestSection, generatedAt: Date): string {
+  if (section.isNominal) return renderNominalSection(section);
+
   const color = SECTION_COLORS[section.region] ?? '#4f8ef7';
   const label = SECTION_LABELS[section.region] ?? section.region.toUpperCase();
   const FLAG_LABELS: Record<string, string> = {
@@ -80,6 +157,13 @@ function renderSectionHtml(section: DigestSection, generatedAt: Date): string {
     })
     .join('');
 
+  const assessmentBlock = section.structuredAssessment
+    ? renderStructuredAssessmentHtml(section.structuredAssessment, color)
+    : `<div style="background:#12121f;border-left:3px solid ${color};padding:14px 18px;border-radius:0 4px 4px 0;">
+              <p style="margin:0 0 6px;font-size:10px;color:#a0a0b8;font-family:${MONO};letter-spacing:2px;text-transform:uppercase;">Analyst Assessment</p>
+              <p style="margin:0;font-size:13px;color:#c8c8de;line-height:1.75;font-family:${BODY};font-weight:300;">${section.interpretiveSummary || 'No analysis available.'}</p>
+            </div>`;
+
   return `
   <tr>
     <td style="padding:0;">
@@ -103,10 +187,7 @@ function renderSectionHtml(section: DigestSection, generatedAt: Date): string {
         </tr>
         <tr>
           <td style="padding:12px 40px 22px;background:#1a1a2e;">
-            <div style="background:#12121f;border-left:3px solid ${color};padding:14px 18px;border-radius:0 4px 4px 0;">
-              <p style="margin:0 0 6px;font-size:10px;color:#a0a0b8;font-family:${MONO};letter-spacing:2px;text-transform:uppercase;">Analyst Assessment</p>
-              <p style="margin:0;font-size:13px;color:#c8c8de;line-height:1.75;font-family:${BODY};font-weight:300;">${section.interpretiveSummary || 'No analysis available.'}</p>
-            </div>
+            ${assessmentBlock}
           </td>
         </tr>
       </table>
@@ -115,6 +196,32 @@ function renderSectionHtml(section: DigestSection, generatedAt: Date): string {
 }
 
 function renderStatsHtml(stats: NewsletterStats): string {
+  const confDist = stats.confidenceDistribution;
+  const totalAssessments = confDist
+    ? confDist.high + confDist.moderate + confDist.low
+    : 0;
+
+  const confidenceRows = confDist
+    ? `
+        <tr><td colspan="2" style="padding:12px 0 4px;font-size:10px;color:#a0a0b8;font-family:${MONO};letter-spacing:2px;text-transform:uppercase;">📊 Confidence Distribution</td></tr>
+        <tr>
+          <td style="padding:4px 0;font-size:12px;color:#c8c8de;font-family:${BODY};">HIGH</td>
+          <td style="padding:4px 0;font-size:12px;color:#22c55e;text-align:right;font-family:${MONO};">${confDist.high} assessment${confDist.high !== 1 ? 's' : ''}${totalAssessments > 0 ? ` (${Math.round(confDist.high / totalAssessments * 100)}%)` : ''}</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 0;font-size:12px;color:#c8c8de;font-family:${BODY};">MODERATE</td>
+          <td style="padding:4px 0;font-size:12px;color:#eab308;text-align:right;font-family:${MONO};">${confDist.moderate} assessment${confDist.moderate !== 1 ? 's' : ''}${totalAssessments > 0 ? ` (${Math.round(confDist.moderate / totalAssessments * 100)}%)` : ''}</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 0;font-size:12px;color:#c8c8de;font-family:${BODY};">LOW</td>
+          <td style="padding:4px 0;font-size:12px;color:#ef4444;text-align:right;font-family:${MONO};">${confDist.low} assessment${confDist.low !== 1 ? 's' : ''}${totalAssessments > 0 ? ` (${Math.round(confDist.low / totalAssessments * 100)}%)` : ''}</td>
+        </tr>
+        ${confDist.nominal > 0 ? `<tr>
+          <td style="padding:4px 0;font-size:12px;color:#c8c8de;font-family:${BODY};">NOMINAL</td>
+          <td style="padding:4px 0;font-size:12px;color:#555;text-align:right;font-family:${MONO};">${confDist.nominal} sector${confDist.nominal !== 1 ? 's' : ''}</td>
+        </tr>` : ''}`
+    : '';
+
   return `
   <tr>
     <td style="padding:22px 40px;background:#12121f;border-top:1px solid rgba(255,255,255,0.08);">
@@ -136,6 +243,7 @@ function renderStatsHtml(stats: NewsletterStats): string {
           <td style="padding:4px 0;font-size:12px;color:#c8c8de;font-family:${BODY};">Avg bias score</td>
           <td style="padding:4px 0;font-size:12px;color:#f5f5f0;text-align:right;font-family:${SUB};">L ${biasBar(stats.avgBiasScore)} R · ${biasLabel(stats.avgBiasScore)}</td>
         </tr>
+        ${confidenceRows}
       </table>
     </td>
   </tr>`;
@@ -164,10 +272,8 @@ export function renderHtmlEmail(newsletter: Newsletter, recipientEmail?: string)
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;600;700&family=Roboto+Mono:wght@400;500;600&family=Roboto+Slab:wght@300;400;500&family=Roboto+Serif:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
   <style>
-    /* Force dark — prevents auto light-mode inversion */
     :root { color-scheme: dark; }
     body { background-color: #12121f !important; color: #f5f5f0 !important; }
-    /* Target only the outer wrapper, NOT inner cells (they use inline styles) */
     .email-wrapper { background-color: #1a1a2e !important; }
     @media (prefers-color-scheme: dark) {
       body { background-color: #12121f !important; color: #f5f5f0 !important; }
@@ -222,6 +328,16 @@ export function renderPlainText(newsletter: Newsletter): string {
 
   const sectionTexts = newsletter.sections.map((s) => {
     const label = SECTION_LABELS[s.region] ?? s.region.toUpperCase();
+
+    if (s.isNominal) {
+      const lastCollection = s.lastCollectionAt
+        ? new Date(s.lastCollectionAt).toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', timeZone: 'America/Chicago', timeZoneName: 'short',
+          })
+        : 'Unknown';
+      return `${label}\n${'─'.repeat(60)}\n▬▬▬ NO NEW DEVELOPMENTS — ${s.region.toUpperCase()} NOMINAL ▬▬▬\nMonitoring continues. Last collection: ${lastCollection}.`;
+    }
+
     const items = s.articles
       .slice(0, 4)
       .map((a, i) => {
@@ -229,8 +345,28 @@ export function renderPlainText(newsletter: Newsletter): string {
         return `${i + 1}. ${a.title}\n   ${a.outletName} · Trust: ${(a.trustRating * 100).toFixed(0)}% (${trustBreakdown(a)})${temporal ? ` · ${temporal}` : ''}${a.vettingFlag ? ` · ${a.vettingFlag}` : ''}\n   ${a.summary}\n   ${a.url}`;
       })
       .join('\n\n');
-    return `${label}\n${'─'.repeat(60)}\n${items || 'No articles.'}\n\nAnalysis: ${s.interpretiveSummary || 'N/A'}`;
+
+    let analysis = '';
+    if (s.structuredAssessment) {
+      const sa = s.structuredAssessment;
+      analysis = [
+        `SITUATION: ${sa.situation}`,
+        `ASSESSMENT: ${sa.assessment}`,
+        `CONFIDENCE: ${sa.confidence} — ${sa.confidenceReasoning}`,
+        `IMPLICATIONS: ${sa.implications}`,
+        `WATCH LIST:\n${sa.watchList.map((w) => `  ▸ ${w}`).join('\n')}`,
+      ].join('\n');
+    } else {
+      analysis = s.interpretiveSummary || 'N/A';
+    }
+
+    return `${label}\n${'─'.repeat(60)}\n${items || 'No articles.'}\n\n${analysis}`;
   });
+
+  const confDist = newsletter.stats.confidenceDistribution;
+  const confStats = confDist
+    ? `\nConfidence: HIGH ${confDist.high} · MODERATE ${confDist.moderate} · LOW ${confDist.low} · NOMINAL ${confDist.nominal}`
+    : '';
 
   return [
     'PROJECT VIGIL — DAILY INTELLIGENCE BRIEF',
@@ -243,6 +379,6 @@ export function renderPlainText(newsletter: Newsletter): string {
     newsletter.crossSectorAnalysis || 'N/A',
     '',
     '📊 SOURCE STATS',
-    `Articles: ${newsletter.stats.totalArticles} · Corroborated: ${(newsletter.stats.corroborationRate * 100).toFixed(0)}% · Avg Trust: ${(newsletter.stats.avgTrustRating * 100).toFixed(0)}%`,
+    `Articles: ${newsletter.stats.totalArticles} · Corroborated: ${(newsletter.stats.corroborationRate * 100).toFixed(0)}% · Avg Trust: ${(newsletter.stats.avgTrustRating * 100).toFixed(0)}%${confStats}`,
   ].join('\n');
 }

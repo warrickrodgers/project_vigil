@@ -1,7 +1,7 @@
 # Project Vigil — Claude Code Session Guide
 
 ## Purpose
-Project Vigil is an OSINT research agent network that collects open-source intelligence across three sectors (Local/KC metro, USA national, Geopolitical), corroborates stories across ideologically-diverse outlets using bias scoring, and dispatches a curated 6 AM newsletter. This repo is the alpha/learning build — SQLite locally, targeting AWS Lambda/EventBridge/SES in production.
+Project Vigil is an OSINT research agent network that collects open-source intelligence across three sectors (Local/KC metro, USA national, Geopolitical), corroborates stories across ideologically-diverse outlets using bias scoring, and dispatches a curated 6 AM newsletter. This repo is the alpha/learning build — local Docker Postgres for dev parity, targeting AWS Lambda/EventBridge/SES in production.
 
 ## Stack
 | Layer | Alpha | Production |
@@ -9,7 +9,7 @@ Project Vigil is an OSINT research agent network that collects open-source intel
 | Runtime | Node 20 + TypeScript (strict) | Same |
 | Package manager | npm workspaces | Same |
 | ORM | Prisma | Same |
-| Database | SQLite (`file:./dev.db`) | Postgres / RDS |
+| Database | Docker Postgres (`localhost:5432/vigil_dev`) | Postgres / RDS |
 | Testing | Vitest | Same |
 | LLM | Gemini 3.1 Flash Lite / Gemini 3 Flash | Same |
 | Search | Tavily (REST, no SDK) | Same |

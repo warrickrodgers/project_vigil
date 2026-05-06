@@ -626,6 +626,646 @@ Someone clicks a Stripe link, pays $4.99, you run `add-subscriber.ts`, they rece
 
 ---
 
+# Project Vigil — Phase 3.5: Analytical Voice + Probability Engine + Bug Fixes
+
+**Status:** ⬜ Ready for implementation
+**Dependencies:** Phase 2a ✅, Phase 2b ✅, Phase 3 ✅ (website live)
+**Estimated size:** L (1-3 days across 2-3 Claude Code sessions)
+
+---
+
+## Context
+
+Phase 2a (vetting refactor) and Phase 2b (vector corroboration + intelligence quality) are complete. The pipeline works end-to-end. However, three problems have emerged from real-world operation:
+
+1. **Duplicate/stale content** — Tavily returns the same or similar articles across consecutive daily runs, producing newsletters that rehash yesterday's stories.
+2. **Descriptive summaries** — The vetting prompt produces summaries that describe publications ("The Kansas City Star reports on local government") rather than extracting intelligence ("Mayor Lucas allocated $200M to BRT corridor expansion, Q3 2026 groundbreak").
+3. **Weak analytical voice** — Assessments hedge, moralize, and describe rather than committing to probability-weighted judgments with actionable implications.
+
+This phase addresses all three with a unified approach: fix the data quality bugs, overhaul every prompt in the system, and introduce a structured probability engine modeled on actual Intelligence Community analytic standards.
+
+Read `CLAUDE.md` first for full project context.
+
+---
+
+## Task 1 — Bug Fixes: Freshness + Dedup
+
+### 1a. Tavily Freshness Controls
+
+**Problem:** Tavily's `max_age_days` is not being constrained, so daily collection runs surface the same articles from 5-7 days ago repeatedly.
+
+**Fix:**
+- Set `max_age_days: 2` as default for all scheduled `!collect` runs
+- Set `max_age_days: 7` for `!scan` commands (ad-hoc deep dives need wider windows)
+- Inject today's date into the query generation prompt so Gemini produces date-aware queries:
+  ```
+  Today is ${new Date().toISOString().split('T')[0]}.
+  Generate search queries that will surface NEW developments from the last 48 hours.
+  Do NOT generate queries about ongoing situations unless there is a new development.
+  ```
+
+**Files to modify:**
+- `packages/agents/src/collector/pipeline.ts` — pass `max_age_days` to TavilyClient
+- `packages/clients/src/tavily/client.ts` — add `maxAgeDays` to search options, pass to Tavily API `days` parameter
+- `packages/agents/src/collector/config.ts` — add date injection to query generation prompt
+
+### 1b. Cross-Run URL Deduplication
+
+**Problem:** URL-level dedup only checks the current batch. Articles collected yesterday can appear again today if Tavily returns the same URL.
+
+**Fix:**
+- Before processing each Tavily result, query the database for any article with the same URL collected in the last 48 hours
+- If found, skip silently (don't even send to Gemini — save the API call)
+- Log skipped URLs at debug level for telemetry
+
+**Files to modify:**
+- `packages/agents/src/collector/pipeline.ts` — add pre-processing DB check
+- The `VigilDB` interface needs a method: `hasRecentArticle(url: string, withinHours: number): Promise<boolean>`
+
+### 1c. Staleness Detection in Aggregator
+
+**Problem:** When no new articles exist for a sector, the aggregator rehashes previous days' stories, producing repetitive sections.
+
+**Fix:**
+- In the aggregator, after filtering articles for a section, check if ALL articles in the section are older than 18 hours from newsletter generation time
+- If so, render a `NOMINAL` section instead:
+  ```
+  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+  NO NEW DEVELOPMENTS — [SECTOR] NOMINAL
+  Monitoring continues. Last collection: [timestamp]
+  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+  ```
+- Style: muted monospace, reduced opacity, no analyst assessment for NOMINAL sections
+- A professional intelligence brief treats silence as more credible than repetition
+- The cross-sector analyst assessment should note which sectors are nominal and why that itself may be significant
+
+**Files to modify:**
+- `packages/agents/src/aggregator/` — section builder logic
+- Newsletter HTML template — NOMINAL rendering
+- Discord embed formatter — NOMINAL variant
+
+---
+
+## Task 2 — Analytical Voice Overhaul
+
+The north star voice is **Andrew Bustamante** (former CIA officer, Shawn Ryan Show appearances). The analytical framework encodes five principles that must be injected into every assessment prompt across the system.
+
+### 2a. The Five Principles
+
+These are NOT suggestions — they are mandatory constraints injected as a system prompt block into every Gemini call that produces analyst output.
+
+```typescript
+export const ANALYST_VOICE_DIRECTIVE = `
+You are a senior intelligence analyst producing a classified-style briefing.
+Your analytical voice follows these five mandatory principles:
+
+1. INCENTIVE FRAMEWORK
+   Never frame geopolitical actors as good or evil, moral or immoral.
+   Always analyze through incentive structures:
+   - "Actor X is doing Y because it serves interests A and B"
+   - "This behavior is rational given their constraints: [list constraints]"
+   This makes intelligence extrapolatable — if we know the incentives,
+   we can model likely behavior when those incentives shift.
+
+2. COMMITTED ASSESSMENTS
+   Never hedge with "maybe," "it seems," "could potentially," or "remains to be seen."
+   Commit to a probability-weighted assessment using IC-standard language:
+   - "Most likely course of action: X"
+   - "Assess with HIGH confidence that Y"
+   - "Watch for Z as confirmation or contradiction"
+   If uncertain, quantify the uncertainty — don't hide behind vague language.
+
+3. PATTERN OVER EVENT
+   Do not simply report what happened. Analyze what pattern it is part of:
+   - "This is the Nth instance of X in [timeframe] — the pattern indicates Y"
+   - "This fits an established playbook: [describe playbook]"
+   - "Break from pattern: this deviates from prior behavior, suggesting Z"
+   Single events are noise. Patterns are intelligence.
+
+4. ALWAYS OPERATIONAL
+   Every assessment must end with something the reader can act on:
+   - "Decision-makers should monitor [specific indicator]"
+   - "Watch for [specific event] as confirmation or contradiction"
+   - "Stakeholders in [sector] should prepare for [specific scenario]"
+   If there is nothing operational, state: "No immediate action required. Continue monitoring."
+
+5. DOT CONNECTING
+   Explicitly connect across scales where relevant:
+   - Local → National: "The KC transit decision matters nationally because..."
+   - National → Local: "Federal rate decisions will reach KC homeowners via..."
+   - Geopolitical → Domestic: "This trade shift will hit midwest manufacturing through..."
+   Intelligence value comes from connections the reader cannot make alone.
+`;
+```
+
+### 2b. Prohibited Phrases
+
+Add to every Gemini prompt that produces text output (summaries, assessments, actionable intel):
+
+```typescript
+export const PROHIBITED_PHRASES = `
+NEVER use any of the following phrases or patterns:
+- "It is worth noting that..."
+- "This article discusses..."
+- "According to reports..."
+- "It remains to be seen..."
+- "In conclusion..."
+- "This website covers..."
+- "The publication reports..."
+- "This is a significant development..."
+- "Time will tell..."
+- "Only time will tell..."
+- Any passive, hedging, or descriptive language about the source rather than the intelligence
+- Any moral framing of geopolitical actors (no "aggressive," "threatening," "rogue," "destabilizing")
+- Any meta-commentary about the article itself rather than the events it describes
+
+Instead:
+- Extract facts, names, numbers, dates, locations
+- State assessments with committed probability language
+- Analyze through incentive structures, not moral frameworks
+- Every sentence must contain intelligence value — cut anything that doesn't
+`;
+```
+
+### 2c. Prompt Injection Points
+
+The voice directive and prohibited phrases must be injected into these specific prompts:
+
+| Prompt Location | File | What It Produces |
+|----------------|------|-----------------|
+| Article vetting/summarization | `packages/agents/src/collector/pipeline.ts` or `vetting.ts` | `summary` + `actionableIntel` fields |
+| Section analyst assessment | `packages/agents/src/aggregator/` | Per-section analyst assessment block |
+| Cross-sector analysis | `packages/agents/src/aggregator/` | Cross-sector synthesis at bottom of newsletter |
+| `!scan` deep dive | `packages/agents/src/collector/pipeline.ts` | Ad-hoc topic analysis |
+
+**Implementation:** Create `packages/shared/src/prompts/analyst-voice.ts` that exports `ANALYST_VOICE_DIRECTIVE` and `PROHIBITED_PHRASES` as constants. Import and prepend to every analyst-facing Gemini call's system prompt.
+
+### 2d. Summary Prompt Fix
+
+The current vetting prompt allows Gemini to describe publications rather than extracting intelligence. The summary field instruction must be explicit:
+
+```
+SUMMARY: Extract the specific facts, events, decisions, numbers, dates,
+and named actors from this article. Never describe what the article or
+publication is about. Never describe the source.
+
+BAD: "The Kansas City Star reports on local government activities and
+municipal budget decisions in the metro area."
+
+GOOD: "Kansas City Council approved $200M BRT corridor expansion.
+Groundbreak Q3 2026, service target 2028. Route: Troost Ave from
+downtown to 85th St. Federal match: $120M from FTA Capital program.
+Mayor Lucas cited 40% ridership increase on existing MAX line."
+
+Every sentence must contain a specific fact. If the article contains
+no extractable facts, return summary: "NO EXTRACTABLE INTELLIGENCE"
+and the pipeline will skip it.
+```
+
+---
+
+## Task 3 — Probability Engine
+
+### 3a. ICD 203 Probability Language Table
+
+The US Intelligence Community Directive 203 defines seven standard probability terms with numerical ranges. This is the actual IC standard, not an approximation.
+
+Create `packages/shared/src/probability.ts`:
+
+```typescript
+/**
+ * ICD 203 Analytic Standards — Probability Language
+ *
+ * Source: Intelligence Community Directive 203 (DNI, revised January 2015)
+ * Reference: PMC6469752 (Wintle et al. 2019) Table 1 — confirmed ranges
+ *
+ * These terms are injected into every analyst assessment prompt to ensure
+ * consistent, auditable probability language across all Vigil output.
+ */
+
+export interface ProbabilityTerm {
+  primary: string;          // Primary term
+  alternate: string;        // Alternate phrasing (IC-standard synonym)
+  rangeMin: number;         // Lower bound (inclusive), 0-100
+  rangeMax: number;         // Upper bound (inclusive), 0-100
+  usage: string;            // When to use this term
+}
+
+export const IC_PROBABILITY_TABLE: ProbabilityTerm[] = [
+  {
+    primary: 'Almost no chance',
+    alternate: 'Remote',
+    rangeMin: 1,
+    rangeMax: 5,
+    usage: 'Event would require multiple independent failures or unprecedented reversal of established trends',
+  },
+  {
+    primary: 'Very unlikely',
+    alternate: 'Highly improbable',
+    rangeMin: 5,
+    rangeMax: 20,
+    usage: 'Event conflicts with established patterns and most available evidence, but cannot be ruled out',
+  },
+  {
+    primary: 'Unlikely',
+    alternate: 'Improbable',
+    rangeMin: 20,
+    rangeMax: 45,
+    usage: 'Evidence weighs against this outcome, but significant uncertainty remains',
+  },
+  {
+    primary: 'Roughly even chance',
+    alternate: 'Roughly even odds',
+    rangeMin: 45,
+    rangeMax: 55,
+    usage: 'Available evidence does not favor either outcome; genuinely uncertain',
+  },
+  {
+    primary: 'Likely',
+    alternate: 'Probable',
+    rangeMin: 55,
+    rangeMax: 80,
+    usage: 'Evidence and established patterns favor this outcome, though alternatives remain plausible',
+  },
+  {
+    primary: 'Very likely',
+    alternate: 'Highly probable',
+    rangeMin: 80,
+    rangeMax: 95,
+    usage: 'Strong evidence and multiple indicators support this outcome; would require significant new information to change assessment',
+  },
+  {
+    primary: 'Almost certainly',
+    alternate: 'Nearly certain',
+    rangeMin: 95,
+    rangeMax: 99,
+    usage: 'All available evidence and established patterns support this outcome; only a major unforeseen development would alter assessment',
+  },
+];
+
+/**
+ * Given a numeric probability (0-100), return the matching IC term.
+ */
+export function probabilityToTerm(probability: number): ProbabilityTerm {
+  const clamped = Math.max(1, Math.min(99, probability));
+  const match = IC_PROBABILITY_TABLE.find(
+    t => clamped >= t.rangeMin && clamped <= t.rangeMax
+  );
+  // Should never happen with clamped input, but fallback to "roughly even chance"
+  return match ?? IC_PROBABILITY_TABLE[3];
+}
+
+/**
+ * Format the probability table as a string block for prompt injection.
+ */
+export function formatProbabilityTableForPrompt(): string {
+  const header = 'USE THESE IC-STANDARD PROBABILITY TERMS (ICD 203):\n';
+  const rows = IC_PROBABILITY_TABLE.map(
+    t => `  "${t.primary}" (or "${t.alternate}"): ${t.rangeMin}-${t.rangeMax}% — ${t.usage}`
+  ).join('\n');
+  const footer = '\n\nNEVER use non-standard probability language. ' +
+    'NEVER say "maybe," "perhaps," "could potentially," "might," or "remains to be seen." ' +
+    'Always commit to one of the seven terms above with explicit reasoning.';
+  return header + rows + footer;
+}
+```
+
+### 3b. Confidence Levels
+
+Separate from probability (likelihood of an outcome), confidence reflects the quality and quantity of evidence supporting the assessment.
+
+Add to `packages/shared/src/probability.ts`:
+
+```typescript
+export type ConfidenceLevel = 'HIGH' | 'MODERATE' | 'LOW';
+
+export interface ConfidenceAssessment {
+  level: ConfidenceLevel;
+  reasoning: string;
+}
+
+/**
+ * Derive confidence level from existing trust/corroboration data.
+ * This is deterministic — no LLM needed.
+ */
+export function deriveConfidence(
+  trustScore: number,
+  isCorroborated: boolean,
+  outletKnown: boolean
+): ConfidenceLevel {
+  if (trustScore > 0.7 && isCorroborated) return 'HIGH';
+  if (trustScore < 0.4 || (!isCorroborated && !outletKnown)) return 'LOW';
+  return 'MODERATE';
+}
+
+/**
+ * Format confidence level with explanation for newsletter rendering.
+ */
+export function formatConfidenceExplanation(
+  level: ConfidenceLevel,
+  trustScore: number,
+  isCorroborated: boolean,
+  sourceCount: number
+): string {
+  switch (level) {
+    case 'HIGH':
+      return `HIGH CONFIDENCE — ${sourceCount} corroborating sources, trust score ${(trustScore * 100).toFixed(0)}%`;
+    case 'MODERATE':
+      return `MODERATE CONFIDENCE — ${isCorroborated ? 'corroborated' : 'single source'}, trust score ${(trustScore * 100).toFixed(0)}%`;
+    case 'LOW':
+      return `LOW CONFIDENCE — ${isCorroborated ? '' : 'unverified, '}trust score ${(trustScore * 100).toFixed(0)}%`;
+  }
+}
+
+/**
+ * Format the confidence framework as a string block for prompt injection.
+ */
+export function formatConfidenceFrameworkForPrompt(): string {
+  return `
+CONFIDENCE LEVELS (assign one to every assessment):
+  HIGH — Multiple corroborating sources from reliable outlets. Trust score > 70%.
+         Use when: evidence is strong and cross-verified.
+  MODERATE — Single credible source, or partially corroborated. Trust 40-70%.
+             Use when: evidence is plausible but not fully verified.
+  LOW — Unverified, single source, or unknown outlet. Trust < 40%.
+        Use when: reporting but cannot validate. Always flag what would raise confidence.
+
+IMPORTANT: Confidence is about EVIDENCE QUALITY, not about how certain you are.
+A HIGH confidence + "unlikely" assessment is valid:
+"We assess with HIGH CONFIDENCE that a rate cut is UNLIKELY (20-45%) this quarter."
+This means: we have strong evidence, and that evidence points to no cut.
+`;
+}
+```
+
+### 3c. Assessment Structure Type
+
+Create `packages/shared/src/types/assessment.ts`:
+
+```typescript
+import { ConfidenceLevel } from '../probability';
+
+/**
+ * Structured analyst assessment following IC analytic tradecraft standards.
+ * Every section assessment and cross-sector analysis must follow this structure.
+ */
+export interface StructuredAssessment {
+  /** What happened — facts only, no editorializing. Named actors, numbers, dates. */
+  situation: string;
+
+  /** What it means — committed, probability-weighted using IC language.
+   *  Must use ICD 203 terms. Must analyze through incentive framework. */
+  assessment: string;
+
+  /** Evidence quality — HIGH/MODERATE/LOW with explicit reasoning. */
+  confidence: ConfidenceLevel;
+  confidenceReasoning: string;
+
+  /** What it means for the reader operationally.
+   *  Must contain specific actions, indicators to watch, or preparations to make. */
+  implications: string;
+
+  /** What to monitor as confirmation or contradiction of the assessment.
+   *  Specific, observable indicators — not vague "watch this space" language. */
+  watchList: string[];
+}
+
+/**
+ * Zod schema for validating Gemini's structured assessment output.
+ * Use with completeJSON() to ensure the model returns all required fields.
+ */
+export const StructuredAssessmentSchema = z.object({
+  situation: z.string().min(50, 'Situation must contain specific facts'),
+  assessment: z.string().min(50, 'Assessment must be substantive'),
+  confidence: z.enum(['HIGH', 'MODERATE', 'LOW']),
+  confidenceReasoning: z.string().min(20),
+  implications: z.string().min(30),
+  watchList: z.array(z.string()).min(1).max(5),
+});
+```
+
+### 3d. Prompt Assembly
+
+Create `packages/shared/src/prompts/assessment-prompt.ts` that assembles the full analyst prompt from components:
+
+```typescript
+import { ANALYST_VOICE_DIRECTIVE, PROHIBITED_PHRASES } from './analyst-voice';
+import { formatProbabilityTableForPrompt, formatConfidenceFrameworkForPrompt } from '../probability';
+
+/**
+ * Assemble the full analyst system prompt.
+ * Injected into every Gemini call that produces analyst assessment output.
+ */
+export function buildAnalystSystemPrompt(): string {
+  return [
+    ANALYST_VOICE_DIRECTIVE,
+    formatProbabilityTableForPrompt(),
+    formatConfidenceFrameworkForPrompt(),
+    PROHIBITED_PHRASES,
+    `
+OUTPUT STRUCTURE — every assessment must follow this exact structure:
+
+SITUATION: [Facts only. Named actors, numbers, dates, locations. No editorializing.]
+
+ASSESSMENT: [Committed, probability-weighted analysis using IC-standard terms.
+Analyze through incentive frameworks. Identify patterns, not just events.
+Connect across scales (local ↔ national ↔ global) where relevant.]
+
+CONFIDENCE: [HIGH/MODERATE/LOW] — [Explicit reasoning citing source count, corroboration, outlet reliability]
+
+IMPLICATIONS: [What should the reader do, prepare for, or watch.
+Must be specific and operational. "Monitor the situation" is NOT acceptable.]
+
+WATCH LIST:
+- [Specific observable indicator #1 that would confirm or contradict this assessment]
+- [Specific observable indicator #2]
+- [Specific observable indicator #3]
+`,
+  ].join('\n\n---\n\n');
+}
+
+/**
+ * Assemble the article vetting system prompt.
+ * Used for the unified vetting call that produces summary + actionableIntel.
+ */
+export function buildVettingSystemPrompt(): string {
+  return [
+    `You are an intelligence analyst extracting actionable intelligence from open sources.`,
+    PROHIBITED_PHRASES,
+    `
+SUMMARY EXTRACTION RULES:
+- Extract specific facts, events, decisions, numbers, dates, and named actors
+- NEVER describe what the article or publication is about
+- NEVER describe the source itself
+- Every sentence must contain a specific, verifiable fact
+- If the article contains no extractable facts, return summary: "NO EXTRACTABLE INTELLIGENCE"
+
+BAD: "The Kansas City Star reports on local government activities and budget decisions."
+GOOD: "Kansas City Council approved $200M BRT corridor expansion. Groundbreak Q3 2026,
+service target 2028. Route: Troost Ave downtown to 85th St. Federal match: $120M FTA."
+
+ACTIONABLE INTEL RULES:
+- State what the reader should DO, PREPARE FOR, or MONITOR
+- Reference specific timelines, locations, dollar amounts, deadlines
+- Connect to the reader's operational context (their neighborhood, their taxes, their industry)
+- "This may impact the community" is NOT acceptable
+`,
+  ].join('\n\n');
+}
+```
+
+### 3e. Deterministic Injection
+
+The probability table, confidence framework, and voice directive are **static text blocks** injected into prompts — not dynamic LLM-generated content. This makes them:
+- **Consistent** — every assessment uses the same probability language
+- **Auditable** — subscribers can see exactly how assessments are calibrated
+- **Cheap** — no extra API calls, just prompt context
+
+---
+
+## Task 4 — Template Updates
+
+### 4a. NOMINAL Section Rendering
+
+Add to the newsletter HTML template:
+
+```html
+<!-- NOMINAL section — no new developments -->
+<tr>
+  <td style="padding:24px 40px;background:#0d0d0d;border-left:3px solid #333;">
+    <p style="margin:0;font-family:monospace;font-size:13px;color:#555;letter-spacing:2px;">
+      ▬▬▬ NO NEW DEVELOPMENTS — [SECTOR] NOMINAL ▬▬▬
+    </p>
+    <p style="margin:8px 0 0;font-family:monospace;font-size:11px;color:#444;">
+      Monitoring continues. Last collection: [timestamp]. Next sweep: [time].
+    </p>
+  </td>
+</tr>
+```
+
+No analyst assessment for NOMINAL sections. The cross-sector analyst SHOULD note which sectors are nominal and whether that absence is itself significant.
+
+### 4b. Structured Assessment Rendering
+
+Replace the current free-text analyst assessment blocks with structured rendering:
+
+```html
+<!-- Structured Assessment -->
+<div style="background:#0d0d0d;border-left:3px solid [section-color];padding:16px 20px;">
+  <p style="margin:0 0 4px;font-size:10px;color:#666;font-family:monospace;letter-spacing:2px;">SITUATION</p>
+  <p style="margin:0 0 12px;font-size:13px;color:#ccc;line-height:1.6;">[situation text]</p>
+
+  <p style="margin:0 0 4px;font-size:10px;color:#666;font-family:monospace;letter-spacing:2px;">ASSESSMENT</p>
+  <p style="margin:0 0 12px;font-size:13px;color:#e8e8e8;line-height:1.6;">[assessment text]</p>
+
+  <p style="margin:0 0 4px;font-size:10px;color:#666;font-family:monospace;letter-spacing:2px;">CONFIDENCE</p>
+  <p style="margin:0 0 12px;font-size:13px;color:[confidence-color];line-height:1.6;font-family:monospace;">
+    [HIGH/MODERATE/LOW] — [reasoning]
+  </p>
+
+  <p style="margin:0 0 4px;font-size:10px;color:#666;font-family:monospace;letter-spacing:2px;">IMPLICATIONS</p>
+  <p style="margin:0 0 12px;font-size:13px;color:#c9a227;line-height:1.6;">[implications text]</p>
+
+  <p style="margin:0 0 4px;font-size:10px;color:#666;font-family:monospace;letter-spacing:2px;">WATCH LIST</p>
+  <p style="margin:0;font-size:12px;color:#aaa;line-height:1.8;font-family:monospace;">
+    ▸ [indicator 1]<br>
+    ▸ [indicator 2]<br>
+    ▸ [indicator 3]
+  </p>
+</div>
+```
+
+Confidence color: HIGH = `#22c55e`, MODERATE = `#eab308`, LOW = `#ef4444`.
+
+### 4c. Newsletter Stats Update
+
+Update the source reliability summary section at the bottom of the newsletter to include confidence distribution:
+
+```
+📊 SOURCE RELIABILITY SUMMARY
+Articles analyzed:        22
+Corroboration rate:       45%
+Avg trust rating:         68%
+Avg bias:                 L ────▼──── R · Center-Left
+
+📊 CONFIDENCE DISTRIBUTION
+HIGH:      5 assessments (41%)
+MODERATE:  6 assessments (50%)
+LOW:       1 assessment  (8%)
+NOMINAL:   1 sector (Local)
+```
+
+### 4d. Discord Embed Updates
+
+Update `packages/discord/src/embeds/intel-card.ts`:
+- Add confidence level badge (GREEN/YELLOW/RED) alongside existing trust + bias indicators
+- For NOMINAL sectors, send a single muted embed: "📊 [SECTOR] — NOMINAL. No new developments. Monitoring continues."
+
+---
+
+## File Summary
+
+### New Files
+| File | Purpose |
+|------|---------|
+| `packages/shared/src/probability.ts` | IC probability table, confidence levels, format helpers |
+| `packages/shared/src/types/assessment.ts` | `StructuredAssessment` type + Zod schema |
+| `packages/shared/src/prompts/analyst-voice.ts` | Voice directive + prohibited phrases constants |
+| `packages/shared/src/prompts/assessment-prompt.ts` | Prompt assembly functions |
+| `packages/shared/src/__tests__/probability.test.ts` | Probability + confidence tests |
+
+### Modified Files
+| File | Changes |
+|------|---------|
+| `packages/clients/src/tavily/client.ts` | Add `maxAgeDays` parameter |
+| `packages/agents/src/collector/pipeline.ts` | Date injection in query prompt, 48hr URL dedup, freshness controls |
+| `packages/agents/src/collector/vetting.ts` | New vetting system prompt with voice + prohibited phrases |
+| `packages/agents/src/aggregator/` | Staleness detection, NOMINAL sections, structured assessment output |
+| Newsletter HTML template | NOMINAL rendering, structured assessment blocks, confidence colors, updated stats |
+| `packages/discord/src/embeds/intel-card.ts` | Confidence badge, NOMINAL embed variant |
+| `packages/discord/src/embeds/newsletter.ts` | Confidence distribution in digest embed |
+| `packages/shared/src/index.ts` | Re-export new modules |
+
+---
+
+## Acceptance Criteria
+
+1. **Zero duplicate articles across consecutive runs:** Run `!collect` for the same region twice, 6+ hours apart. Zero URL overlap. Verify with DB query: `SELECT url, COUNT(*) FROM Article WHERE collectedAt > [24h ago] GROUP BY url HAVING COUNT(*) > 1` returns empty.
+
+2. **All summaries contain specific facts:** Run a collection. Every article summary must contain at least one of: a proper noun (person/org/place), a number (dollar amount, percentage, count), or a date. No summary should contain phrases from the prohibited list. Verify by grep against PROHIBITED_PHRASES patterns.
+
+3. **NOMINAL section renders correctly:** Delete all articles for one region, then run `!digest`. That section should render as NOMINAL with muted styling. The cross-sector assessment should note the nominal sector.
+
+4. **Structured assessments in every section:** Each non-NOMINAL section assessment contains all five fields: SITUATION, ASSESSMENT, CONFIDENCE, IMPLICATIONS, WATCH LIST. No field is empty.
+
+5. **IC probability language used consistently:** Every assessment uses at least one term from the ICD 203 table. No assessment contains prohibited hedging language ("maybe," "it seems," "remains to be seen," "could potentially").
+
+6. **Confidence distribution in newsletter stats:** Bottom stats section shows HIGH/MODERATE/LOW/NOMINAL counts.
+
+7. **Incentive-framework analysis:** At least one geopolitical assessment analyzes actor behavior through incentive structures rather than moral framing. No assessment uses "aggressive," "threatening," "rogue," or "destabilizing" to describe state actors.
+
+---
+
+## Out of Scope
+
+- AWS deployment changes (Phase 2c)
+- Monetization / Stripe / Clerk (Phase 2.5)
+- Source Vetting Agent (Phase 4)
+- Changes to the scheduling system
+- Changes to the vector corroboration logic (Phase 2b is complete)
+- New Discord commands (no new `!` commands in this phase)
+
+---
+
+## Report Back With
+
+1. File tree diff (new + modified files)
+2. `npm test` output with test count
+3. Sample newsletter output showing: one NOMINAL section, one structured assessment with all five fields, confidence distribution in stats
+4. Grep results showing zero prohibited phrases in a sample collection run's summaries
+5. Before/after comparison: same article processed with old prompt vs. new prompt
+6. Any concerns about prompt token budget — the voice directive + probability table + confidence framework adds ~800 tokens to every analyst call. Verify this stays within Gemini's context window with room for article content.
+
 ### Phase 4 — Growth ⬜
 
 **Goal:** Scale subscriber base, expand intelligence coverage, add premium features.

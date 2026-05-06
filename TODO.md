@@ -1,3 +1,9 @@
+# Immediate TODOs
+
+- [ ] **Clerk — restrict to invite-only**: Clerk Dashboard → your production app → **User & Authentication → Restrictions** → enable "Allowlist" mode. Add approved emails manually. Blocks public sign-ups until pre-alpha approval comes through.
+
+---
+
 # Phase 2C Setup — Completed
 
 All infrastructure setup tasks are complete. The pipeline is live.

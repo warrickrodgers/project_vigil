@@ -4,6 +4,7 @@ import {
   computeArticleHash,
   resolveOutlet,
   serializeSectorTags,
+  buildVettingSystemPrompt,
 } from '@vigil/shared';
 import type { Region, SectorTag } from '@vigil/shared';
 import { formatIntelEmbed } from '@vigil/discord';
@@ -116,7 +117,7 @@ export class CollectorAgent {
       const queries = await this.generateQueries(region);
       logger.info('Generated queries', { region, queries });
 
-      const searchResults = await this.executeSearches(queries, region, 3);
+      const searchResults = await this.executeSearches(queries, region, 3, 'basic', 2);
       result.articlesFound = searchResults.length;
 
       for (const sr of searchResults) {
@@ -163,7 +164,7 @@ export class CollectorAgent {
 
       const outlets = await this.loadOutlets(region);
       const queries = await this.generateScanQueries(region, topic);
-      const searchResults = await this.executeSearches(queries, region, 5, 'advanced');
+      const searchResults = await this.executeSearches(queries, region, 5, 'advanced', 7);
       result.articlesFound = searchResults.length;
 
       for (const sr of searchResults) {
@@ -228,17 +229,20 @@ export class CollectorAgent {
     const config = REGION_CONFIGS[region];
     const today = new Date().toISOString().slice(0, 10);
     const result = await this.gemini.completeJSON(
-      `You are an OSINT analyst. Generate exactly 3 Tavily search queries to surface the most significant news from the past 24 hours.
+      `You are an OSINT analyst. Generate exactly 3 Tavily search queries to surface NEW developments from the last 48 hours.
+
+Today is ${today}. Generate search queries that will surface NEW developments from the last 48 hours.
+Do NOT generate queries about ongoing situations unless there is a specific new development today or yesterday.
 
 Region: ${config.displayName}
 Context: ${config.contextPrompt}
 Key topics: ${config.baseTopics.join(', ')}
-Today: ${today}
 
 Requirements:
-- Each query targets recent, significant developments
+- Each query targets RECENT, BREAKING developments — not background on ongoing situations
 - Queries must be diverse — different angles, not repetitive
-- Phrase them as a news researcher would search Tavily
+- Include a date hint (e.g. "May 2026" or "this week") in at least one query
+- Phrase them as a news researcher searching for TODAY's news
 
 Return JSON: { "queries": ["query1", "query2", "query3"] }`,
       { tier: 'fast', schema: QueryGenerationSchema, label: `generate-queries-${region}` },
@@ -266,13 +270,14 @@ Return JSON: { "queries": ["query1", "query2", "query3"] }`,
     region: Region,
     maxResults: number,
     searchDepth: 'basic' | 'advanced' = 'basic',
+    days = 10,
   ): Promise<TavilySearchResult[]> {
     const results: TavilySearchResult[] = [];
     const seen = new Set<string>();
 
     for (const query of queries) {
       try {
-        const hits = await this.tavily.search(query, { searchDepth, maxResults, label: `collect-${region}` });
+        const hits = await this.tavily.search(query, { searchDepth, maxResults, days, label: `collect-${region}` });
         for (const hit of hits) {
           if (!seen.has(hit.url)) {
             seen.add(hit.url);
@@ -300,9 +305,14 @@ Return JSON: { "queries": ["query1", "query2", "query3"] }`,
     region: Region,
   ): Promise<UnifiedVettingResult | null> {
     const config = REGION_CONFIGS[region];
+    const systemPrompt = buildVettingSystemPrompt();
     try {
       return await this.gemini.completeJSON(
-        `You are an OSINT analyst. Analyze this news article for an intelligence brief.
+        `${systemPrompt}
+
+---
+
+Analyze this news article for an intelligence brief.
 
 Title: ${sr.title}
 URL: ${sr.url}
@@ -310,13 +320,12 @@ Content: ${sr.content.slice(0, 2000)}
 
 Context: ${config.contextPrompt}
 
-ARTICLE ANALYSIS:
-- summary: 2-3 sentence factual summary (max 500 chars)
-- actionableIntel: 1-2 sentences of SPECIFIC implications. Name WHO is affected (residents,
-  investors, commuters, businesses), WHAT to watch or do, and any TIMELINE.
+Extract the following fields:
+- summary: 2-3 sentences of SPECIFIC facts (named actors, numbers, dates, locations). Max 500 chars.
+  If no extractable facts exist, return: "NO EXTRACTABLE INTELLIGENCE"
+- actionableIntel: 1-2 sentences. Name WHO is affected, WHAT to do or watch, and any TIMELINE. Max 350 chars.
   BAD: "The city council approved a budget."
   GOOD: "OP homeowners face a new millage rate starting Q3; 435 corridor commuters should plan for road work delays through summer."
-  Max 350 chars.
 - biasScore: float -1.0 (hard left) to 1.0 (hard right) based on framing and word choice
 - sectorTags: 1-3 tags from exactly: policy, economy, conflict, tech, health, environment, legal
 - outletName: the publishing outlet's canonical name (e.g. "Reuters", "Kansas City Star")
@@ -342,7 +351,14 @@ Return JSON with all 6 fields.`,
     channelId: string,
     options: CollectionOptions,
   ): Promise<boolean> {
-    // Dedup before vetting — avoid wasting a Gemini call on duplicates
+    // Cross-run URL dedup — skip if this URL was collected in the last 48 hours
+    const recentDupe = await this.db.article.hasRecentArticle(sr.url, 48);
+    if (recentDupe) {
+      logger.debug('Cross-run duplicate — URL seen in last 48h, skipping', { url: sr.url });
+      return false;
+    }
+
+    // Hash dedup within current batch and across all time
     const rawBody = sr.rawContent ?? sr.content;
     const hash = computeArticleHash(sr.title, rawBody);
     const existing = await this.db.article.findFirst({

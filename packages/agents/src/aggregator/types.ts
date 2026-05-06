@@ -1,4 +1,5 @@
 import type { Region } from '@vigil/shared';
+import type { StructuredAssessment } from '@vigil/shared';
 import type { EmbedBuilder } from 'discord.js';
 
 export interface ArticleRow {
@@ -28,6 +29,12 @@ export interface DigestSection {
   label: string;
   articles: RankedArticle[];
   interpretiveSummary: string;
+  /** True when all articles in this section are >18 hours old — renders as NOMINAL. */
+  isNominal?: boolean;
+  /** Structured IC-format assessment (replaces free-text interpretiveSummary in rendering). */
+  structuredAssessment?: StructuredAssessment;
+  /** ISO timestamp of the most recent collection in this sector (for NOMINAL display). */
+  lastCollectionAt?: Date;
 }
 
 export interface NewsletterStats {
@@ -36,6 +43,12 @@ export interface NewsletterStats {
   avgTrustRating: number;
   avgBiasScore: number;
   sectorCounts: Record<Region, number>;
+  confidenceDistribution?: {
+    high: number;
+    moderate: number;
+    low: number;
+    nominal: number;
+  };
 }
 
 export interface Newsletter {

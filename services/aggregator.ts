@@ -5,8 +5,8 @@ import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 
 import { prisma } from '@vigil/db';
 import { APICallTracker, GeminiClient, logger } from '@vigil/clients';
-import { AggregatorAgent, renderHtmlEmail, renderPlainText } from '@vigil/agents';
-import type { VigilDB, AggregatorEmitter } from '@vigil/agents';
+import { AggregatorAgent, makeVigilDB, renderHtmlEmail, renderPlainText } from '@vigil/agents';
+import type { AggregatorEmitter } from '@vigil/agents';
 
 export interface AggregatorEvent {
   /** Hours to look back for articles. Defaults to 24. */
@@ -32,7 +32,7 @@ const noopEmitter: AggregatorEmitter = {
 export const handler: LambdaHandler<AggregatorEvent, AggregatorResult> = async (event) => {
   const tracker = new APICallTracker();
   const gemini = new GeminiClient(process.env['GEMINI_API_KEY'] ?? '', tracker);
-  const agent = new AggregatorAgent(gemini, noopEmitter, prisma as unknown as VigilDB);
+  const agent = new AggregatorAgent(gemini, noopEmitter, makeVigilDB(prisma));
 
   const newsletter = await agent.digest(event.lookbackHours);
   const html = renderHtmlEmail(newsletter);

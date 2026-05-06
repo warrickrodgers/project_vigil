@@ -22,7 +22,7 @@ export type {
   ReviewHandler,
   FlagHandler,
 } from './types.js';
-export { formatIntelEmbed } from './embeds/intel-card.js';
+export { formatIntelEmbed, formatNominalEmbed } from './embeds/intel-card.js';
 export { formatNewsletterDigest } from './embeds/newsletter.js';
 export { formatBiasAlertEmbed } from './embeds/bias-alert.js';
 export { formatStatusEmbed } from './embeds/status.js';

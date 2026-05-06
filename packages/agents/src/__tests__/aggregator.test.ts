@@ -21,6 +21,8 @@ vi.mock('@vigil/discord', () => ({
 // ---------------------------------------------------------------------------
 
 function makeArticleRow(overrides: Partial<Record<string, unknown>> = {}) {
+  // Use recent timestamps by default so sections are NOT flagged NOMINAL (> 18h old)
+  const recentDate = new Date(Date.now() - 2 * 60 * 60 * 1000); // 2 hours ago
   return {
     id: `art-${Math.random().toString(36).slice(2)}`,
     title: 'KC Mayor announces transit expansion',
@@ -30,8 +32,8 @@ function makeArticleRow(overrides: Partial<Record<string, unknown>> = {}) {
     trustRating: 0.72,
     region: 'local',
     sectorTags: '["policy","economy"]',
-    collectedAt: new Date('2026-04-21T05:00:00Z'),
-    publishedAt: new Date('2026-04-21T04:00:00Z'),
+    collectedAt: recentDate,
+    publishedAt: new Date(recentDate.getTime() - 60 * 60 * 1000),
     corroboratedById: null,
     outlet: { canonicalName: 'Kansas City Star', reliabilityBase: 0.78 },
     ...overrides,
@@ -66,9 +68,21 @@ function makeMockPrisma(articles: unknown[] = []) {
   };
 }
 
+const MOCK_STRUCTURED_ASSESSMENT = {
+  situation: 'Mayor Q approved $200M BRT expansion; groundbreak Q3 2026.',
+  assessment: 'Likely to proceed on schedule given Federal match secured.',
+  confidence: 'MODERATE',
+  confidenceReasoning: 'Single source, outlet reliability 78%.',
+  implications: 'Corridor commuters should plan for construction delays through summer.',
+  watchList: ['Contract award announcement', 'Federal funding release'],
+};
+
 function makeGemini() {
   return {
     completeJSON: vi.fn().mockImplementation((_prompt: string, opts: { label?: string }) => {
+      if (opts?.label?.startsWith('structured-assessment')) {
+        return Promise.resolve(MOCK_STRUCTURED_ASSESSMENT);
+      }
       if (opts?.label?.startsWith('section-summary')) {
         return Promise.resolve({ interpretiveSummary: 'Key developments noted across the region.' });
       }
@@ -137,7 +151,7 @@ describe('AggregatorAgent', () => {
       );
     });
 
-    it('generates interpretive summaries for each section with articles', async () => {
+    it('generates structured assessments for each section with articles', async () => {
       const articles = [
         makeArticleRow({ region: 'local', trustRating: 0.8 }),
         makeArticleRow({ region: 'local', trustRating: 0.75, url: 'https://fox4kc.com/transit', title: 'Transit riders react' }),
@@ -147,8 +161,9 @@ describe('AggregatorAgent', () => {
 
       await agent.digest(24);
 
+      // Assessments now use 'structured-assessment-*' label (Phase 3.5)
       const sectionCalls = gemini.completeJSON.mock.calls.filter(([, opts]) =>
-        (opts as { label?: string })?.label?.startsWith('section-summary'),
+        (opts as { label?: string })?.label?.startsWith('structured-assessment'),
       );
       expect(sectionCalls.length).toBeGreaterThanOrEqual(1);
     });
@@ -194,20 +209,21 @@ describe('AggregatorAgent', () => {
       expect(capableCalls.length).toBeGreaterThan(0);
     });
 
-    it('includes KC-specific local guidance in the local section summary prompt', async () => {
+    it('includes KC-specific local guidance in the local section assessment prompt', async () => {
       const articles = [makeArticleRow({ region: 'local' })];
       const db = makeMockPrisma(articles);
       const agent = new AggregatorAgent(gemini as never, emitter, db as never);
 
       await agent.digest(24);
 
-      const localSummaryCall = gemini.completeJSON.mock.calls.find(([, opts]) =>
-        (opts as { label?: string })?.label === 'section-summary-local',
+      // Phase 3.5: label changed from section-summary-local → structured-assessment-local
+      const localAssessmentCall = gemini.completeJSON.mock.calls.find(([, opts]) =>
+        (opts as { label?: string })?.label === 'structured-assessment-local',
       );
-      expect(localSummaryCall).toBeDefined();
-      const prompt = localSummaryCall![0] as string;
+      expect(localAssessmentCall).toBeDefined();
+      const prompt = localAssessmentCall![0] as string;
       expect(prompt).toContain('Kansas City metro');
-      expect(prompt).toContain('daily lives');
+      expect(prompt).toContain('KC resident');
     });
 
     it('includes article summaries in cross-sector analysis prompt', async () => {
@@ -232,9 +248,10 @@ describe('AggregatorAgent', () => {
       expect(prompt).toContain('downstream');
     });
 
-    it('continues if Gemini section summary throws', async () => {
+    it('continues if Gemini section assessment throws', async () => {
       gemini.completeJSON.mockImplementation((_prompt: string, opts: { label?: string }) => {
-        if (opts?.label?.startsWith('section-summary')) {
+        const label = (opts as { label?: string })?.label ?? '';
+        if (label.startsWith('structured-assessment') || label.startsWith('section-summary')) {
           return Promise.reject(new Error('Gemini quota exceeded'));
         }
         return Promise.resolve({ crossSectorAnalysis: 'Analysis.' });

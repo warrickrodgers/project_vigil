@@ -77,5 +77,7 @@ export interface VigilDB {
     create: (args: unknown) => Promise<unknown>;
     update: (args: unknown) => Promise<unknown>;
     count: (args?: unknown) => Promise<number>;
+    /** Returns true if an article with this URL was collected within the given window. */
+    hasRecentArticle: (url: string, withinHours: number) => Promise<boolean>;
   };
 }

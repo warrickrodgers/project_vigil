@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import { DiscordService, formatStatusEmbed } from '@vigil/discord';
 import { APICallTracker, GeminiClient, TavilyClient, SearchBudget, ChromaClient, logger, GEMINI_MODELS } from '@vigil/clients';
-import { CollectorAgent, AggregatorAgent } from '@vigil/agents';
-import type { VigilDB, AggregatorEmitter } from '@vigil/agents';
+import { CollectorAgent, AggregatorAgent, makeVigilDB } from '@vigil/agents';
+import type { AggregatorEmitter } from '@vigil/agents';
 import { prisma } from '@vigil/db';
 import type { Region } from '@vigil/shared';
 
@@ -71,7 +71,7 @@ const collector = new CollectorAgent(
     requestApproval: (request, channelId) => svc.requestApproval(request, channelId),
     requestSkipReview: (request, channelId) => svc.requestSkipReview(request, channelId),
   },
-  prisma as unknown as VigilDB,
+  makeVigilDB(prisma),
   chroma,
 );
 
@@ -92,7 +92,7 @@ const aggregatorEmitter: AggregatorEmitter = {
 const aggregator = new AggregatorAgent(
   gemini,
   aggregatorEmitter,
-  prisma as unknown as VigilDB,
+  makeVigilDB(prisma),
 );
 
 // ---------------------------------------------------------------------------

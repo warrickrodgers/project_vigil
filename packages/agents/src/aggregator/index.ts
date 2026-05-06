@@ -1,11 +1,16 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { z } from 'zod';
 import { logger } from '@vigil/clients';
 import type { GeminiClient } from '@vigil/clients';
 import { formatNewsletterDigest } from '@vigil/discord';
 import type { CommandOptions } from '@vigil/discord';
 import type { Region } from '@vigil/shared';
+import {
+  buildAnalystSystemPrompt,
+  StructuredAssessmentSchema,
+  deriveConfidence,
+} from '@vigil/shared';
+import type { StructuredAssessment, ConfidenceLevel } from '@vigil/shared';
 import type { VigilDB } from '../collector/types.js';
 import { detectCorroborations } from './corroborator.js';
 import { rankArticles, computeNewsletterStats } from './ranker.js';
@@ -16,18 +21,6 @@ import type {
   DigestSection,
   Newsletter,
 } from './types.js';
-
-// ---------------------------------------------------------------------------
-// Gemini output schemas
-// ---------------------------------------------------------------------------
-
-const SectionSummarySchema = z.object({
-  interpretiveSummary: z.string().max(800),
-});
-
-const CrossSectorSchema = z.object({
-  crossSectorAnalysis: z.string().max(1200),
-});
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -45,6 +38,8 @@ const DEFAULT_LOOKBACK_HOURS = 24;
 const FLASH_LOOKBACK_HOURS = 6;
 const FLASH_MIN_TRUST = 0.6;
 const FLASH_MAX_ITEMS = 5;
+/** Sections where all articles are older than this are rendered as NOMINAL. */
+const NOMINAL_STALENESS_HOURS = 18;
 
 // ---------------------------------------------------------------------------
 // AggregatorAgent
@@ -86,31 +81,58 @@ export class AggregatorAgent {
       logger.info('Corroborations persisted', { count: pairs.length });
     }
 
-    const stats = computeNewsletterStats(articles);
+    const baseStats = computeNewsletterStats(articles);
 
-    // Build one section per region — rank, then editorialize
+    // Build one section per region — rank, staleness check, then editorialize
     const sections: DigestSection[] = await Promise.all(
       REGIONS.map(async (region) => {
         const regionArticles = articles.filter((a) => a.region === region);
         const ranked = rankArticles(regionArticles, nowMs);
         const top = ranked.slice(0, 4);
-        const interpretiveSummary = top.length > 0
-          ? await this.generateSectionSummary(region, top.map((a) => ({
-              title: a.title,
-              outletName: a.outletName,
-              summary: a.summary,
-            })))
-          : '';
+
+        // NOMINAL detection: all articles older than 18h → silence is more credible than repetition
+        const nominalCutoffMs = NOMINAL_STALENESS_HOURS * 60 * 60 * 1000;
+        const isNominal =
+          top.length === 0 ||
+          top.every((a) => nowMs - new Date(a.collectedAt).getTime() > nominalCutoffMs);
+
+        const lastCollectionAt =
+          top.length > 0 ? new Date(top[0]!.collectedAt) : undefined;
+
+        let interpretiveSummary = '';
+        let structuredAssessment: StructuredAssessment | undefined;
+
+        if (!isNominal && top.length > 0) {
+          structuredAssessment = await this.generateStructuredAssessment(
+            region,
+            top,
+          ).catch(() => undefined);
+          // Fallback plain summary if structured call fails
+          if (!structuredAssessment) {
+            interpretiveSummary = await this.generateSectionSummaryFallback(
+              region,
+              top.map((a) => ({ title: a.title, outletName: a.outletName, summary: a.summary })),
+            );
+          }
+        }
+
         return {
           region,
           label: SECTION_LABELS[region] ?? region.toUpperCase(),
           articles: ranked,
           interpretiveSummary,
+          isNominal,
+          structuredAssessment,
+          lastCollectionAt,
         };
       }),
     );
 
     const crossSectorAnalysis = await this.generateCrossSectorAnalysis(sections);
+
+    // Compute confidence distribution across non-NOMINAL sections
+    const confidenceDistribution = this.computeConfidenceDistribution(sections);
+    const stats = { ...baseStats, confidenceDistribution };
 
     const newsletter: Newsletter = {
       sections,
@@ -252,93 +274,127 @@ export class AggregatorAgent {
   }
 
   private localSectorGuidance(): string {
-    return `\n\nThis is the LOCAL sector for Kansas City metro. Your assessment MUST be the most actionable of all sections — KC residents read this to know how these developments affect their daily lives:
-- Name specific neighborhoods, suburbs, or corridors (Overland Park, Westport, Crossroads, 435 corridor, Northland, Lee's Summit, etc.) when relevant
-- If a policy or budget change: who pays more, who benefits, and when does it take effect?
-- If infrastructure or transit news: which routes or areas are impacted and for how long?
-- If economic news: which local employers, industries, or job seekers should pay attention?
-- Write as if you're briefing a KC resident who asks: "What does this actually mean for me this week?"`;
+    return `\nThis is the LOCAL sector for Kansas City metro. Implications MUST name specific neighborhoods, corridors, or employer groups (Overland Park, Crossroads, 435 corridor, Northland, Lee's Summit). Write as if briefing a KC resident: "What does this mean for me this week?"`;
   }
 
-  private async generateSectionSummary(
+  private async generateStructuredAssessment(
+    region: Region,
+    articles: import('./types.js').RankedArticle[],
+  ): Promise<StructuredAssessment> {
+    const articleList = articles
+      .map((a, i) =>
+        `${i + 1}. "${a.title}" (${a.outletName}, trust: ${(a.trustRating * 100).toFixed(0)}%${a.isCorroborated ? ', corroborated' : ''})\n   ${a.summary}`,
+      )
+      .join('\n\n');
+
+    const regionLabel = SECTION_LABELS[region] ?? region;
+    const localGuidance = region === 'local' ? this.localSectorGuidance() : '';
+    const systemPrompt = buildAnalystSystemPrompt();
+
+    const result = await this.gemini.completeJSON(
+      `${systemPrompt}
+
+---
+
+You are writing the analyst assessment for the ${regionLabel} section of a classified daily intelligence brief.${localGuidance}
+
+Based on these ${articles.length} article(s), produce a structured assessment following the OUTPUT STRUCTURE above exactly.
+
+Articles:
+${articleList}
+
+Return a single JSON object with keys: situation, assessment, confidence, confidenceReasoning, implications, watchList`,
+      {
+        tier: 'capable',
+        schema: StructuredAssessmentSchema,
+        label: `structured-assessment-${region}`,
+      },
+    );
+
+    return result as StructuredAssessment;
+  }
+
+  private async generateSectionSummaryFallback(
     region: Region,
     articles: Array<{ title: string; outletName: string; summary: string }>,
   ): Promise<string> {
     const articleList = articles
       .map((a, i) => `${i + 1}. "${a.title}" (${a.outletName})\n   ${a.summary}`)
       .join('\n\n');
-
     const regionLabel = SECTION_LABELS[region] ?? region;
-    const regionGuidance = region === 'local' ? this.localSectorGuidance() : '';
 
     try {
+      const { z } = await import('zod');
+      const FallbackSchema = z.object({ interpretiveSummary: z.string().max(800) });
       const result = await this.gemini.completeJSON(
-        `You are a senior OSINT analyst writing the interpretive summary for the ${regionLabel} section of a daily intelligence brief.
-
-Based on these ${articles.length} article(s), write a concise 3-4 sentence analyst assessment:
-- What is the key development or pattern across these stories?
-- What does this mean for stakeholders in this region?
-- What should readers watch for in the coming days?${regionGuidance}
-
-Keep the tone factual, intelligence-brief style. No filler phrases like "In summary" or "It is worth noting."
+        `You are a senior OSINT analyst. Write a 3-4 sentence factual summary for the ${regionLabel} section. Extract key facts, patterns, and what readers should watch.
 
 Articles:
 ${articleList}
 
-Return JSON: { "interpretiveSummary": "<3-4 sentence analysis>" }`,
-        {
-          tier: 'capable',
-          schema: SectionSummarySchema,
-          label: `section-summary-${region}`,
-        },
+Return JSON: { "interpretiveSummary": "..." }`,
+        { tier: 'capable', schema: FallbackSchema, label: `section-summary-fallback-${region}` },
       );
-      return result.interpretiveSummary;
+      return (result as { interpretiveSummary: string }).interpretiveSummary;
     } catch (err) {
-      logger.error(
-        'Failed to generate section summary',
-        err instanceof Error ? err : new Error(String(err)),
-        { region },
-      );
+      logger.error('Section summary fallback failed', err instanceof Error ? err : new Error(String(err)), { region });
       return '';
     }
   }
 
   private async generateCrossSectorAnalysis(sections: DigestSection[]): Promise<string> {
+    const systemPrompt = buildAnalystSystemPrompt();
+
     const sectionSummaries = sections
       .map((s) => {
         const label = SECTION_LABELS[s.region] ?? s.region.toUpperCase();
-        const articles = s.articles
+        if (s.isNominal) return `${label}:\n  NOMINAL — no new developments. Monitoring continues.`;
+        const articleLines = s.articles
           .slice(0, 3)
-          .map((a) => `  - ${a.title} (${a.outletName}${a.isCorroborated ? ', corroborated' : ''})\n    ${a.summary}`)
+          .map(
+            (a) =>
+              `  - ${a.title} (${a.outletName}${a.isCorroborated ? ', corroborated' : ''})\n    ${a.summary}`,
+          )
           .join('\n');
-        return `${label}:\n${articles || '  (no articles)'}${s.interpretiveSummary ? `\n  Analyst assessment: ${s.interpretiveSummary}` : ''}`;
+        const assessment = s.structuredAssessment
+          ? `\n  Situation: ${s.structuredAssessment.situation}\n  Assessment: ${s.structuredAssessment.assessment}`
+          : s.interpretiveSummary
+          ? `\n  Assessment: ${s.interpretiveSummary}`
+          : '';
+        return `${label}:\n${articleLines || '  (no articles)'}${assessment}`;
       })
       .join('\n\n');
 
+    const nominalSectors = sections.filter((s) => s.isNominal).map((s) => s.region);
+    const nominalNote =
+      nominalSectors.length > 0
+        ? `\n\nNOTE: The following sectors are NOMINAL (no new developments in last 18h): ${nominalSectors.join(', ')}. If relevant, note whether that silence is itself significant.`
+        : '';
+
     try {
+      const { z } = await import('zod');
+      const CrossSectorSchema = z.object({ crossSectorAnalysis: z.string().max(1500) });
       const result = await this.gemini.completeJSON(
-        `You are a senior OSINT analyst synthesizing intelligence across three sectors for a daily brief.
+        `${systemPrompt}
 
-Write a 4-5 sentence cross-sector analysis that:
-- Identifies the single most important theme or pattern connecting Local, National, and Geopolitical developments today
-- Explicitly traces any downstream effects: how do geopolitical or national events ripple into local KC metro conditions?
-- Names the top risk emerging from the combined picture (be specific — who is exposed and to what)
-- Names the top opportunity or development that deserves a closer watch
-- Closes with what to monitor most closely in the next 24-48 hours
+---
 
-Tone: intelligence-brief style. Factual, direct, specific. No hedging filler. Treat readers as capable adults who want the unvarnished picture.
+Synthesize intelligence across all sectors for today's brief.${nominalNote}
 
-Today's intelligence across sectors:
+Write 4-5 sentences that:
+- Identify the single most important theme or pattern connecting developments across active sectors
+- Explicitly trace downstream effects (geopolitical → national → KC local where applicable)
+- Name the top risk with specific exposure (who, to what, by when)
+- Name the top development deserving closer watch
+- Close with the single most important indicator to monitor in the next 24-48 hours
+
+Today's sector intelligence:
 ${sectionSummaries}
 
 Return JSON: { "crossSectorAnalysis": "<4-5 sentence synthesis>" }`,
-        {
-          tier: 'capable',
-          schema: CrossSectorSchema,
-          label: 'cross-sector-analysis',
-        },
+        { tier: 'capable', schema: CrossSectorSchema, label: 'cross-sector-analysis' },
       );
-      return result.crossSectorAnalysis;
+      return (result as { crossSectorAnalysis: string }).crossSectorAnalysis;
     } catch (err) {
       logger.error(
         'Failed to generate cross-sector analysis',
@@ -346,6 +402,37 @@ Return JSON: { "crossSectorAnalysis": "<4-5 sentence synthesis>" }`,
       );
       return '';
     }
+  }
+
+  private computeConfidenceDistribution(
+    sections: DigestSection[],
+  ): { high: number; moderate: number; low: number; nominal: number } {
+    const dist = { high: 0, moderate: 0, low: 0, nominal: 0 };
+
+    for (const section of sections) {
+      if (section.isNominal) {
+        dist.nominal++;
+        continue;
+      }
+      if (section.structuredAssessment) {
+        const level = section.structuredAssessment.confidence as ConfidenceLevel;
+        if (level === 'HIGH') dist.high++;
+        else if (level === 'MODERATE') dist.moderate++;
+        else dist.low++;
+      } else {
+        // No structured assessment — derive from section's article aggregate
+        const top = section.articles.slice(0, 4);
+        if (top.length === 0) continue;
+        const avgTrust = top.reduce((s, a) => s + a.trustRating, 0) / top.length;
+        const anyCorroborated = top.some((a) => a.isCorroborated);
+        const level = deriveConfidence(avgTrust, anyCorroborated, true);
+        if (level === 'HIGH') dist.high++;
+        else if (level === 'MODERATE') dist.moderate++;
+        else dist.low++;
+      }
+    }
+
+    return dist;
   }
 
   private async logEmailDryRun(newsletter: Newsletter): Promise<void> {
@@ -434,6 +521,7 @@ Return JSON: { "crossSectorAnalysis": "<4-5 sentence synthesis>" }`,
         label: SECTION_LABELS[region] ?? region.toUpperCase(),
         articles: [],
         interpretiveSummary: '',
+        isNominal: true,
       })),
       crossSectorAnalysis: '',
       stats: {
@@ -442,6 +530,7 @@ Return JSON: { "crossSectorAnalysis": "<4-5 sentence synthesis>" }`,
         avgTrustRating: 0,
         avgBiasScore: 0,
         sectorCounts: { local: 0, usa: 0, geopolitical: 0 },
+        confidenceDistribution: { high: 0, moderate: 0, low: 0, nominal: 3 },
       },
       generatedAt: new Date(),
       lookbackHours,

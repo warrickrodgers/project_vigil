@@ -7,7 +7,14 @@ import type { CollectorEmitter } from '../collector/types.js';
 
 const mockPrisma = {
   outlet: { findMany: vi.fn(), findFirst: vi.fn().mockResolvedValue(null), create: vi.fn() },
-  article: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn(), create: vi.fn(), update: vi.fn().mockResolvedValue({}), count: vi.fn() },
+  article: {
+    findMany: vi.fn().mockResolvedValue([]),
+    findFirst: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn().mockResolvedValue({}),
+    count: vi.fn(),
+    hasRecentArticle: vi.fn().mockResolvedValue(false), // no 48h dupe by default
+  },
 };
 
 vi.mock('@vigil/clients', () => ({

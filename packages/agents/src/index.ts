@@ -1,5 +1,6 @@
 export { CollectorAgent } from './collector/pipeline.js';
 export { REGION_CONFIGS } from './collector/config.js';
+export { makeVigilDB } from './collector/db-adapter.js';
 export type { CollectionResult, CollectorEmitter, OutletRecord, VigilDB } from './collector/types.js';
 
 export { AggregatorAgent } from './aggregator/index.js';

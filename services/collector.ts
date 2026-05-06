@@ -3,8 +3,7 @@ type LambdaHandler<TEvent, TResult> = (event: TEvent) => Promise<TResult>;
 
 import { prisma } from '@vigil/db';
 import { APICallTracker, GeminiClient, TavilyClient, SearchBudget, ChromaClient, logger } from '@vigil/clients';
-import { CollectorAgent } from '@vigil/agents';
-import type { VigilDB } from '@vigil/agents';
+import { CollectorAgent, makeVigilDB } from '@vigil/agents';
 import type { Region } from '@vigil/shared';
 import { createLambdaEmitter } from './lib/lambda-emitter.js';
 import { loadBudgetState, saveBudgetState } from './lib/db-budget.js';
@@ -52,7 +51,7 @@ export const handler: LambdaHandler<CollectorEvent, CollectorResult> = async (ev
       gemini,
       tavily,
       emitter,
-      prisma as unknown as VigilDB,
+      makeVigilDB(prisma),
       chroma,
     );
 
