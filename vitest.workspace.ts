@@ -5,4 +5,5 @@ export default defineWorkspace([
   'packages/clients',
   'packages/discord',
   'packages/agents',
+  'services',
 ]);

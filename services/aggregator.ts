@@ -60,7 +60,7 @@ export const handler: LambdaHandler<AggregatorEvent, AggregatorResult> = async (
   const dateLabel = newsletter.generatedAt.toLocaleDateString('en-US', {
     weekday: 'long', month: 'long', day: 'numeric', timeZone: 'America/Chicago',
   });
-  const subject = `Project Vigil — ${dateLabel}`;
+  const subject = `[VIGIL] Intel Brief — ${dateLabel}`;
 
   // Send individually so each email has a personalized unsubscribe link
   let sent = 0;
