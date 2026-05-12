@@ -106,7 +106,10 @@ export class AggregatorAgent {
           structuredAssessment = await this.generateStructuredAssessment(
             region,
             top,
-          ).catch(() => undefined);
+          ).catch((err) => {
+            logger.error('Structured assessment failed — falling back to plain summary', err instanceof Error ? err : new Error(String(err)), { region });
+            return undefined;
+          });
           // Fallback plain summary if structured call fails
           if (!structuredAssessment) {
             interpretiveSummary = await this.generateSectionSummaryFallback(

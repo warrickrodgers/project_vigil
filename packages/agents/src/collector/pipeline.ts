@@ -322,7 +322,9 @@ Context: ${config.contextPrompt}
 
 Extract the following fields:
 - summary: 2-3 sentences of SPECIFIC facts (named actors, numbers, dates, locations). Max 500 chars.
-  If no extractable facts exist, return: "NO EXTRACTABLE INTELLIGENCE"
+  If the content is an outlet homepage, "About Us" page, category listing, subscription prompt, or
+  any page that is NOT a specific news article, return exactly: "NO EXTRACTABLE INTELLIGENCE"
+  Also return "NO EXTRACTABLE INTELLIGENCE" if no concrete facts (actors, numbers, dates) can be extracted.
 - actionableIntel: 1-2 sentences. Name WHO is affected, WHAT to do or watch, and any TIMELINE. Max 350 chars.
   BAD: "The city council approved a budget."
   GOOD: "OP homeowners face a new millage rate starting Q3; 435 corridor commuters should plan for road work delays through summer."
@@ -372,6 +374,13 @@ Return JSON with all 6 fields.`,
     // Single consolidated Gemini call
     const geminiResult = await this.callUnifiedVetting(sr, region);
     if (!geminiResult) return false;
+
+    // Reject outlet homepages, about pages, and category listings — Tavily sometimes
+    // returns these when it can't cleanly scrape an article body.
+    if (geminiResult.summary === 'NO EXTRACTABLE INTELLIGENCE') {
+      logger.info('Article skipped — no extractable intelligence (likely non-article page)', { url: sr.url });
+      return false;
+    }
 
     // Resolve outlet — AI name first, then domain fallback
     const domain = this.extractDomain(sr.url);
@@ -454,11 +463,15 @@ Return JSON with all 6 fields.`,
       }
     }
 
-    // Parse publish date
+    // Parse publish date — clamp to 10 days max age. Gemini can correctly identify
+    // a genuine old publish date, but if it slipped through Tavily's days filter we
+    // don't want "Published 750 days ago" appearing in the newsletter.
     let publishedAt: Date;
     try {
       const parsed = new Date(vetting.estimatedPublishDate);
-      publishedAt = isNaN(parsed.getTime()) ? new Date() : parsed;
+      const MAX_AGE_MS = 10 * 24 * 60 * 60 * 1000;
+      const tooOld = Date.now() - parsed.getTime() > MAX_AGE_MS;
+      publishedAt = isNaN(parsed.getTime()) || tooOld ? new Date() : parsed;
     } catch {
       publishedAt = new Date();
     }

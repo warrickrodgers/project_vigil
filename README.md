@@ -200,6 +200,120 @@ Expected: up to 5 articles from an advanced-depth Tavily search (7-day window) p
 
 ---
 
+## Development Guide
+
+### Workflow overview
+
+| Change type | What to do |
+|-------------|-----------|
+| Web app (`apps/web/`) | Push to `main` — Vercel deploys automatically |
+| Lambda / infra (`services/`, `packages/`, `infra/`) | Push to `main`, then run `cdk deploy` from `infra/` |
+
+CI runs lint, typecheck, and all tests on every push to `main`. Check the Actions tab before deploying if you want confirmation the build is green.
+
+---
+
+### Deploying the Web App
+
+Push your changes to `main`. Vercel picks up the push and deploys automatically — no manual step required.
+
+```bash
+git push origin main
+```
+
+---
+
+### Deploying Lambda Changes (AWS CDK)
+
+Any change to `services/`, `packages/agents/`, `packages/clients/`, `packages/shared/`, or `infra/` needs a `cdk deploy` to reach AWS.
+
+**Prerequisites**
+- AWS CLI configured (`aws configure` or `AWS_PROFILE` env var set)
+- CDK bootstrapped in your account/region (one-time: `cd infra && npx cdk bootstrap`)
+- Root `.env` populated with all secrets — CDK reads these at synth time and bakes them into the Lambda environment
+
+**Deploy**
+
+```bash
+cd infra
+npx cdk deploy
+```
+
+CDK will print a changeset diff and prompt for confirmation before touching any resources. Review it — only approve if the diff matches what you changed.
+
+**Preview changes without deploying**
+
+```bash
+cd infra
+npx cdk diff
+```
+
+**Force a clean synth before deploying** (if `cdk.out` looks stale)
+
+```bash
+cd infra
+npx cdk synth && npx cdk deploy
+```
+
+---
+
+### Testing Lambdas After Deploy
+
+Find the deployed function names (CDK appends a hash to the logical ID):
+
+```bash
+aws lambda list-functions \
+  --query "Functions[?starts_with(FunctionName, 'VigilStack')].FunctionName" \
+  --output table
+```
+
+**Invoke the collector** (single region):
+
+```bash
+aws lambda invoke \
+  --function-name VigilStack-CollectorFunction<hash> \
+  --payload '{"region":"local"}' \
+  --cli-binary-format raw-in-base64-out \
+  response.json && cat response.json
+```
+
+Omit `region` to run all three sectors:
+
+```bash
+aws lambda invoke \
+  --function-name VigilStack-CollectorFunction<hash> \
+  --payload '{}' \
+  --cli-binary-format raw-in-base64-out \
+  response.json && cat response.json
+```
+
+**Invoke the aggregator** (generates and sends the newsletter):
+
+```bash
+aws lambda invoke \
+  --function-name VigilStack-AggregatorFunction<hash> \
+  --payload '{}' \
+  --cli-binary-format raw-in-base64-out \
+  response.json && cat response.json
+```
+
+---
+
+### Troubleshooting Deploys
+
+**`DATABASE_URL` resolved to empty string**
+The Lambda environment is baked at synth time from your root `.env`. If `DATABASE_URL` is blank in `.env` when you run `cdk deploy`, the Lambda gets a blank value. Fix: populate `.env`, then redeploy.
+
+**Verify a Lambda's current environment without redeploying:**
+
+```bash
+aws lambda get-function-configuration \
+  --function-name VigilStack-CollectorFunction<hash> \
+  --query "Environment.Variables"
+```
+
+---
+
 ## Architecture Notes
 
 See [CLAUDE.md](./CLAUDE.md) for full architecture notes, phase roadmap, AI client design, and session context.
