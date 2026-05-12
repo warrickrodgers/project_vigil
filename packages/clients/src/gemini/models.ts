@@ -1,7 +1,7 @@
 export const GEMINI_MODELS = {
   fast: {
-    id: 'gemini-3.1-flash-lite-preview',
-    displayName: 'Gemini 3.1 Flash Lite',
+    id: 'gemini-2.5-flash-lite',
+    displayName: 'Gemini 2.5 Flash Lite',
     inputPricePer1M: 0.0, // TODO: update when GA pricing published
     outputPricePer1M: 0.0, // TODO: update when GA pricing published
     rpdLimit: 500,

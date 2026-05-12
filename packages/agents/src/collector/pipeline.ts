@@ -117,12 +117,19 @@ export class CollectorAgent {
       const queries = await this.generateQueries(region);
       logger.info('Generated queries', { region, queries });
 
-      const searchResults = await this.executeSearches(queries, region, 3, 'basic', 2);
+      const searchResults = await this.executeSearches(queries, region, 3, 'basic', config.maxAgeDays);
       result.articlesFound = searchResults.length;
+
+      // Build recent-URL set once — avoids N+1 DB queries inside the loop
+      const recentArticles = await this.db.article.findMany({
+        where: { collectedAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) } },
+        select: { url: true },
+      }) as Array<{ url: string }>;
+      const recentUrlSet = new Set(recentArticles.map((a) => a.url));
 
       for (const sr of searchResults) {
         try {
-          const saved = await this.processResult(sr, region, outlets, channelId, options);
+          const saved = await this.processResult(sr, region, outlets, channelId, options, recentUrlSet);
           if (saved) result.articlesSaved++;
           else result.articlesSkipped++;
         } catch (err) {
@@ -167,9 +174,15 @@ export class CollectorAgent {
       const searchResults = await this.executeSearches(queries, region, 5, 'advanced', 7);
       result.articlesFound = searchResults.length;
 
+      const recentArticles = await this.db.article.findMany({
+        where: { collectedAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) } },
+        select: { url: true },
+      }) as Array<{ url: string }>;
+      const recentUrlSet = new Set(recentArticles.map((a) => a.url));
+
       for (const sr of searchResults) {
         try {
-          const saved = await this.processResult(sr, region, outlets, channelId, {});
+          const saved = await this.processResult(sr, region, outlets, channelId, {}, recentUrlSet);
           if (saved) result.articlesSaved++;
           else result.articlesSkipped++;
         } catch (err) {
@@ -227,11 +240,13 @@ export class CollectorAgent {
 
   private async generateQueries(region: Region): Promise<string[]> {
     const config = REGION_CONFIGS[region];
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date().toLocaleDateString('en-US', {
+      weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+    });
     const result = await this.gemini.completeJSON(
-      `You are an OSINT analyst. Generate exactly 3 Tavily search queries to surface NEW developments from the last 48 hours.
+      `You are an OSINT analyst. Generate exactly 3 Tavily search queries to surface NEW developments from the last 24-48 hours only.
 
-Today is ${today}. Generate search queries that will surface NEW developments from the last 48 hours.
+Today is ${today}. Generate queries that will surface news published TODAY or YESTERDAY only.
 Do NOT generate queries about ongoing situations unless there is a specific new development today or yesterday.
 
 Region: ${config.displayName}
@@ -320,6 +335,15 @@ Content: ${sr.content.slice(0, 2000)}
 
 Context: ${config.contextPrompt}
 
+CRITICAL INSTRUCTIONS FOR SUMMARY FIELD:
+- Do NOT describe what the website, publication, or outlet is about
+- Do NOT say "This article covers...", "This website reports...", or "The [outlet] discusses..."
+- DO extract the specific facts, events, decisions, numbers, and developments from the article content
+- DO write as if briefing a senior decision-maker who needs facts, not a description of a publication
+- BAD: "The Kansas City Star reports on local government activities"
+- GOOD: "Mayor Lucas allocated $200M to BRT corridor expansion on Troost Ave, with Q3 2026 groundbreak and 2028 service target"
+- Your summary must contain specific facts. Generic descriptions will be rejected.
+
 Extract the following fields:
 - summary: 2-3 sentences of SPECIFIC facts (named actors, numbers, dates, locations). Max 500 chars.
   If the content is an outlet homepage, "About Us" page, category listing, subscription prompt, or
@@ -352,11 +376,11 @@ Return JSON with all 6 fields.`,
     outlets: OutletRecord[],
     channelId: string,
     options: CollectionOptions,
+    recentUrlSet: Set<string>,
   ): Promise<boolean> {
-    // Cross-run URL dedup — skip if this URL was collected in the last 48 hours
-    const recentDupe = await this.db.article.hasRecentArticle(sr.url, 48);
-    if (recentDupe) {
-      logger.debug('Cross-run duplicate — URL seen in last 48h, skipping', { url: sr.url });
+    // Cross-run URL dedup — O(1) set lookup, set built once before the processing loop
+    if (recentUrlSet.has(sr.url)) {
+      logger.info('Article skipped — DEDUP: seen in last 48h', { url: sr.url });
       return false;
     }
 
@@ -369,6 +393,23 @@ Return JSON with all 6 fields.`,
     if (existing) {
       logger.debug('Duplicate article — skipping', { url: sr.url });
       return false;
+    }
+
+    // Hard freshness gate using Tavily metadata — saves Gemini tokens on stale results
+    const FRESHNESS_GATE_DAYS = 7;
+    if (sr.publishedDate) {
+      const tavilyDate = new Date(sr.publishedDate);
+      if (!isNaN(tavilyDate.getTime())) {
+        const ageDays = (Date.now() - tavilyDate.getTime()) / (1000 * 60 * 60 * 24);
+        if (ageDays > FRESHNESS_GATE_DAYS) {
+          logger.info('Article rejected at freshness gate', {
+            url: sr.url,
+            reason: `STALE: published ${Math.floor(ageDays)} days ago`,
+            publishedDate: sr.publishedDate,
+          });
+          return false;
+        }
+      }
     }
 
     // Single consolidated Gemini call
@@ -463,15 +504,27 @@ Return JSON with all 6 fields.`,
       }
     }
 
-    // Parse publish date — clamp to 10 days max age. Gemini can correctly identify
-    // a genuine old publish date, but if it slipped through Tavily's days filter we
-    // don't want "Published 750 days ago" appearing in the newsletter.
+    // Parse publish date — Tavily metadata is primary; Gemini estimate is fallback.
+    // Hard-reject anything older than 7 days: this is a second gate for results
+    // where Tavily's published_date was absent but Gemini estimated an old date.
     let publishedAt: Date;
     try {
-      const parsed = new Date(vetting.estimatedPublishDate);
-      const MAX_AGE_MS = 10 * 24 * 60 * 60 * 1000;
-      const tooOld = Date.now() - parsed.getTime() > MAX_AGE_MS;
-      publishedAt = isNaN(parsed.getTime()) || tooOld ? new Date() : parsed;
+      const dateStr = sr.publishedDate ?? vetting.estimatedPublishDate;
+      const parsed = new Date(dateStr);
+      if (isNaN(parsed.getTime())) {
+        publishedAt = new Date();
+      } else {
+        const ageDays = (Date.now() - parsed.getTime()) / (1000 * 60 * 60 * 24);
+        if (ageDays > 7) {
+          logger.info('Article rejected at post-vetting freshness gate', {
+            url: sr.url,
+            reason: `STALE: published ${Math.floor(ageDays)} days ago`,
+            dateSource: sr.publishedDate ? 'tavily' : 'gemini',
+          });
+          return false;
+        }
+        publishedAt = parsed;
+      }
     } catch {
       publishedAt = new Date();
     }

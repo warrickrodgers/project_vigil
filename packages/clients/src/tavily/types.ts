@@ -4,6 +4,8 @@ export interface TavilySearchResult {
   content: string;
   rawContent?: string;
   score: number;
+  /** ISO date string from Tavily's published_date metadata field, if present. */
+  publishedDate?: string;
 }
 
 export interface BudgetStatus {

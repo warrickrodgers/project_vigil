@@ -12,6 +12,9 @@ const DEFAULT_JSON_TEMPERATURE = 0.1;
 const DEFAULT_MAX_TOKENS = 2048;
 const MAX_RETRIES = 3;
 const BACKOFF_MS = [1000, 3000, 9000] as const;
+// Capable tier (Gemini Flash) hits 503s under sustained load; minimum 12s between retries
+// matches Gemini's observed retry-after header for 429/503 responses.
+const CAPABLE_BACKOFF_MS = [4000, 12000, 24000] as const;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -94,8 +97,10 @@ export class GeminiClient {
     prompt: string,
     systemPrompt: string | undefined,
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    backoffOverride?: readonly number[],
   ): Promise<{ text: string; inputTokens: number; outputTokens: number; retryCount: number }> {
+    const backoff = backoffOverride ?? this.backoffMs;
     let lastError: unknown;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
@@ -105,7 +110,7 @@ export class GeminiClient {
         lastError = err;
         if (!isRetryable(err)) throw err;
         if (attempt < MAX_RETRIES) {
-          const delay = this.backoffMs[attempt] ?? 9000;
+          const delay = backoff[attempt] ?? backoff[backoff.length - 1] ?? 9000;
           logger.warn('Gemini API error, retrying', {
             attempt: attempt + 1,
             maxRetries: MAX_RETRIES,
@@ -129,8 +134,12 @@ export class GeminiClient {
     let modelId = primaryModelId;
     let usedFallback = false;
 
+    // Use CAPABLE_BACKOFF_MS for capable tier when the default backoff is in use.
+    // If a custom backoffMs was injected (e.g. [0,0,0] in tests), honour it for all tiers.
+    const usingDefaultBackoff = this.backoffMs === BACKOFF_MS;
+    const tierBackoff = options.tier === 'capable' && usingDefaultBackoff ? CAPABLE_BACKOFF_MS : this.backoffMs;
     const tryPrimary = async () =>
-      this.callWithRetry(primaryModelId, prompt, options.systemPrompt, temperature, maxTokens);
+      this.callWithRetry(primaryModelId, prompt, options.systemPrompt, temperature, maxTokens, tierBackoff);
 
     let result: { text: string; inputTokens: number; outputTokens: number; retryCount: number };
 
@@ -168,7 +177,7 @@ export class GeminiClient {
       logger.warn('Capable tier exhausted, falling back to gemini-2.5-flash', { label });
       modelId = GEMINI_MODELS.capableFallback.id;
       usedFallback = true;
-      result = await this.callWithRetry(modelId, prompt, options.systemPrompt, temperature, maxTokens);
+      result = await this.callWithRetry(modelId, prompt, options.systemPrompt, temperature, maxTokens, tierBackoff);
     }
 
     this.recordEvent({

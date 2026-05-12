@@ -119,7 +119,7 @@ describe('AggregatorAgent', () => {
   describe('digest()', () => {
     it('sends empty-state message when no articles in window', async () => {
       const db = makeMockPrisma([]);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
       const result = await agent.digest(24);
 
       expect(emitter.sendMessage).toHaveBeenCalledWith(
@@ -137,7 +137,7 @@ describe('AggregatorAgent', () => {
         makeArticleRow({ region: 'geopolitical', title: 'EU-China trade summit begins', url: 'https://reuters.com/eu-china' }),
       ];
       const db = makeMockPrisma(articles);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
 
       const result = await agent.digest(24);
 
@@ -157,7 +157,7 @@ describe('AggregatorAgent', () => {
         makeArticleRow({ region: 'local', trustRating: 0.75, url: 'https://fox4kc.com/transit', title: 'Transit riders react' }),
       ];
       const db = makeMockPrisma(articles);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
 
       await agent.digest(24);
 
@@ -186,7 +186,7 @@ describe('AggregatorAgent', () => {
         }),
       ];
       const db = makeMockPrisma(articles);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
 
       await agent.digest(24);
 
@@ -199,7 +199,7 @@ describe('AggregatorAgent', () => {
     it('calls Gemini with capable tier for editorial passes', async () => {
       const articles = [makeArticleRow({ region: 'usa' })];
       const db = makeMockPrisma(articles);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
 
       await agent.digest(24);
 
@@ -210,9 +210,13 @@ describe('AggregatorAgent', () => {
     });
 
     it('includes KC-specific local guidance in the local section assessment prompt', async () => {
-      const articles = [makeArticleRow({ region: 'local' })];
+      // 2 articles needed so freshCount >= 2 and section is not marked NOMINAL
+      const articles = [
+        makeArticleRow({ region: 'local' }),
+        makeArticleRow({ region: 'local', url: 'https://kansascity.com/transit-2', title: 'KC transit expansion vote' }),
+      ];
       const db = makeMockPrisma(articles);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
 
       await agent.digest(24);
 
@@ -227,12 +231,15 @@ describe('AggregatorAgent', () => {
     });
 
     it('includes article summaries in cross-sector analysis prompt', async () => {
+      // 2 articles per active region so freshCount >= 2 and summaries reach the cross-sector prompt
       const articles = [
         makeArticleRow({ region: 'local', title: 'KC transit vote', summary: 'Mayor approved transit funding.' }),
+        makeArticleRow({ region: 'local', url: 'https://kansascity.com/transit-2', title: 'KC transit funding detail', summary: 'City council approved the funding package.' }),
         makeArticleRow({ region: 'usa', title: 'Fed holds rates', summary: 'Fed signals no cuts this quarter.' }),
+        makeArticleRow({ region: 'usa', url: 'https://apnews.com/fed-2', title: 'Fed statement analysis', summary: 'Analysts react to the Fed statement.' }),
       ];
       const db = makeMockPrisma(articles);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
 
       await agent.digest(24);
 
@@ -258,7 +265,7 @@ describe('AggregatorAgent', () => {
       });
 
       const db = makeMockPrisma([makeArticleRow()]);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
 
       const result = await agent.digest(24);
       expect(result.sections[0]!.interpretiveSummary).toBe('');
@@ -267,7 +274,7 @@ describe('AggregatorAgent', () => {
 
     it('uses lookbackHours to set the DB query cutoff', async () => {
       const db = makeMockPrisma([]);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
 
       const before = Date.now();
       await agent.digest(12);
@@ -286,7 +293,7 @@ describe('AggregatorAgent', () => {
   describe('flash()', () => {
     it('sends no-items message when no high-trust articles exist', async () => {
       const db = makeMockPrisma([makeArticleRow({ trustRating: 0.4 })]);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
 
       await agent.flash();
 
@@ -302,7 +309,7 @@ describe('AggregatorAgent', () => {
         makeArticleRow({ trustRating: 0.3, title: 'Low trust — should be filtered' }),
       ];
       const db = makeMockPrisma(articles);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
 
       await agent.flash();
 
@@ -320,7 +327,7 @@ describe('AggregatorAgent', () => {
     it('posts an operational briefing message to general channel', async () => {
       const articles = [makeArticleRow(), makeArticleRow({ region: 'usa', url: 'https://apnews.com/2' })];
       const db = makeMockPrisma(articles);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
 
       await agent.briefing();
 
@@ -332,7 +339,7 @@ describe('AggregatorAgent', () => {
 
     it('shows zero articles when DB has no recent entries', async () => {
       const db = makeMockPrisma([]);
-      const agent = new AggregatorAgent(gemini as never, emitter, db as never);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
 
       await agent.briefing();
 

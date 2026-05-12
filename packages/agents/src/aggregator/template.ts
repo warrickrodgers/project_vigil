@@ -269,6 +269,11 @@ function renderStatsHtml(stats: NewsletterStats): string {
           <td style="padding:4px 0;font-size:12px;color:#c8c8de;font-family:${BODY};">Avg bias score</td>
           <td style="padding:4px 0;font-size:12px;color:#f5f5f0;text-align:right;font-family:${SUB};">L ${biasBar(stats.avgBiasScore)} R · ${biasLabel(stats.avgBiasScore)}</td>
         </tr>
+        ${confDist && confDist.nominal > 0 ? `
+        <tr>
+          <td style="padding:4px 0;font-size:12px;color:#c8c8de;font-family:${BODY};">Sections nominal</td>
+          <td style="padding:4px 0;font-size:12px;color:#555;text-align:right;font-family:${MONO};">${confDist.nominal} of 3</td>
+        </tr>` : ''}
         ${confidenceRows}
       </table>
     </td>

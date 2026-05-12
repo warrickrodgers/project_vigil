@@ -5,6 +5,8 @@ export interface RegionConfig {
   displayName: string;
   contextPrompt: string;
   baseTopics: string[];
+  /** Maximum age of Tavily search results in days for daily collection runs. */
+  maxAgeDays: number;
 }
 
 export const REGION_CONFIGS: Record<Region, RegionConfig> = {
@@ -22,6 +24,7 @@ export const REGION_CONFIGS: Record<Region, RegionConfig> = {
       'kansas city economy business',
       'KC public safety crime',
     ],
+    maxAgeDays: 2,
   },
   usa: {
     region: 'usa',
@@ -36,6 +39,7 @@ export const REGION_CONFIGS: Record<Region, RegionConfig> = {
       'Supreme Court ruling',
       'executive branch policy',
     ],
+    maxAgeDays: 2,
   },
   geopolitical: {
     region: 'geopolitical',
@@ -51,5 +55,6 @@ export const REGION_CONFIGS: Record<Region, RegionConfig> = {
       'geopolitical tensions military',
       'international institutions NATO UN',
     ],
+    maxAgeDays: 2,
   },
 };

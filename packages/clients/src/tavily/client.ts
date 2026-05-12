@@ -12,6 +12,7 @@ interface TavilyRawResult {
   content: string;
   raw_content?: string;
   score: number;
+  published_date?: string;
 }
 
 interface TavilyAPIResponse {
@@ -87,6 +88,7 @@ export class TavilyClient {
           score: r.score,
         };
         if (r.raw_content !== undefined) result.rawContent = r.raw_content;
+        if (r.published_date !== undefined) result.publishedDate = r.published_date;
         return result;
       });
 

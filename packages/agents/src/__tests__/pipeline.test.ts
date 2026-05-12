@@ -69,7 +69,8 @@ const GEMINI_UNIFIED = {
   biasScore: 0.1,
   sectorTags: ['policy', 'economy'],
   outletName: 'Reuters',
-  estimatedPublishDate: '2026-04-22',
+  // Use today so the 7-day freshness gate never rejects fixture articles
+  estimatedPublishDate: new Date().toISOString().slice(0, 10),
 };
 
 const SAVED_ARTICLE = {
@@ -81,7 +82,7 @@ const SAVED_ARTICLE = {
   trustRating: 0.67,
   region: 'local',
   vettingFlag: 'UNVERIFIED',
-  collectedAt: new Date('2026-04-22T06:00:00Z'),
+  collectedAt: new Date(),
 };
 
 function makeEmitter(overrides?: Partial<CollectorEmitter>): CollectorEmitter {

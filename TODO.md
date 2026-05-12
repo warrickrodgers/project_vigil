@@ -115,7 +115,30 @@ NODE_ENV=production npx tsx scripts/add-subscriber.ts --email warrickrodgers@gma
 - [ ] Dashboard shows **Pro** tier badge and active status dot
 - [ ] `/pricing` → all 4 tier cards render correctly
 
-### 7. Stripe Wiring (when ready)
+### 7. Clerk Billing (when ready)
+
+Clerk has a native billing system that avoids a separate Stripe integration for subscription management.
+
+**Steps to wire up:**
+
+1. **Enable Billing in Clerk Dashboard** → Your app → **Billing** → enable the feature and create plans matching your tiers (Free, Pro at $4.99/mo, Regional Pro at $14.99/mo, Enterprise).
+
+2. **Drop in `<PricingTable />`** (optional) — Clerk provides a hosted pricing table component you can render instead of the custom one:
+   ```tsx
+   import { PricingTable } from '@clerk/nextjs';
+   <PricingTable />
+   ```
+   Or keep the custom card UI in `apps/web/src/app/pricing/page.tsx` and wire each CTA to Clerk's checkout URL (available from the Clerk Dashboard per plan).
+
+3. **Gate dashboard content by plan** — use `useUser()` to read `user.publicMetadata.tier` (set by Clerk on subscription), or use `auth().protect()` with a billing check in the route handler.
+
+4. **Handle subscription webhooks** — create `apps/web/src/app/api/webhooks/clerk/billing/route.ts` to listen for `subscription.created`, `subscription.updated`, `subscription.deleted` events and sync the subscriber's tier in the Supabase `Subscriber` table.
+
+5. **Set env vars** — no additional keys needed; Clerk billing uses the same `CLERK_SECRET_KEY`.
+
+> See: https://clerk.com/docs/billing/overview
+
+### 8. Stripe Wiring (alternative — if Clerk Billing doesn't fit)
 
 - [ ] Create Stripe products: Free, Pro ($4.99/mo), Regional Pro ($14.99/mo), Enterprise
 - [ ] Generate Payment Links, add to Vercel env vars

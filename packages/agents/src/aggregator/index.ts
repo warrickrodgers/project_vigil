@@ -9,6 +9,7 @@ import {
   buildAnalystSystemPrompt,
   StructuredAssessmentSchema,
   deriveConfidence,
+  sleep,
 } from '@vigil/shared';
 import type { StructuredAssessment, ConfidenceLevel } from '@vigil/shared';
 import type { VigilDB } from '../collector/types.js';
@@ -46,11 +47,16 @@ const NOMINAL_STALENESS_HOURS = 18;
 // ---------------------------------------------------------------------------
 
 export class AggregatorAgent {
+  private readonly interSectionDelayMs: number;
+
   constructor(
     private readonly gemini: GeminiClient,
     private readonly emitter: AggregatorEmitter,
     private readonly db: VigilDB,
-  ) {}
+    options: { interSectionDelayMs?: number } = {},
+  ) {
+    this.interSectionDelayMs = options.interSectionDelayMs ?? INTER_SECTION_DELAY_MS;
+  }
 
   // ---------------------------------------------------------------------------
   // Public handlers
@@ -83,53 +89,61 @@ export class AggregatorAgent {
 
     const baseStats = computeNewsletterStats(articles);
 
-    // Build one section per region — rank, staleness check, then editorialize
-    const sections: DigestSection[] = await Promise.all(
-      REGIONS.map(async (region) => {
-        const regionArticles = articles.filter((a) => a.region === region);
-        const ranked = rankArticles(regionArticles, nowMs);
-        const top = ranked.slice(0, 4);
+    // Build one section per region — rank, staleness check, then editorialize.
+    // Sections are built sequentially (not in parallel) to avoid 503s on the capable
+    // tier: geopolitical runs third and was consistently hitting rate limits when all
+    // three generateStructuredAssessment calls fired at once.
+    const INTER_SECTION_DELAY_MS = 15_000;
+    const sections: DigestSection[] = [];
+    for (let i = 0; i < REGIONS.length; i++) {
+      const region = REGIONS[i]!;
 
-        // NOMINAL detection: all articles older than 18h → silence is more credible than repetition
-        const nominalCutoffMs = NOMINAL_STALENESS_HOURS * 60 * 60 * 1000;
-        const isNominal =
-          top.length === 0 ||
-          top.every((a) => nowMs - new Date(a.collectedAt).getTime() > nominalCutoffMs);
+      if (i > 0 && this.interSectionDelayMs > 0) await sleep(this.interSectionDelayMs);
 
-        const lastCollectionAt =
-          top.length > 0 ? new Date(top[0]!.collectedAt) : undefined;
+      const regionArticles = articles.filter((a) => a.region === region);
+      const ranked = rankArticles(regionArticles, nowMs);
+      const top = ranked.slice(0, 4);
 
-        let interpretiveSummary = '';
-        let structuredAssessment: StructuredAssessment | undefined;
+      // NOMINAL detection: fewer than 2 fresh articles → silence is more credible than repetition
+      const nominalCutoffMs = NOMINAL_STALENESS_HOURS * 60 * 60 * 1000;
+      const freshCount = top.filter(
+        (a) => nowMs - new Date(a.collectedAt).getTime() <= nominalCutoffMs,
+      ).length;
+      const isNominal = top.length === 0 || freshCount < 2;
 
-        if (!isNominal && top.length > 0) {
-          structuredAssessment = await this.generateStructuredAssessment(
-            region,
-            top,
-          ).catch((err) => {
-            logger.error('Structured assessment failed — falling back to plain summary', err instanceof Error ? err : new Error(String(err)), { region });
-            return undefined;
-          });
-          // Fallback plain summary if structured call fails
-          if (!structuredAssessment) {
-            interpretiveSummary = await this.generateSectionSummaryFallback(
-              region,
-              top.map((a) => ({ title: a.title, outletName: a.outletName, summary: a.summary })),
-            );
-          }
-        }
+      const lastCollectionAt =
+        top.length > 0 ? new Date(top[0]!.collectedAt) : undefined;
 
-        return {
+      let interpretiveSummary = '';
+      let structuredAssessment: StructuredAssessment | undefined;
+
+      if (!isNominal && top.length > 0) {
+        structuredAssessment = await this.generateStructuredAssessment(
           region,
-          label: SECTION_LABELS[region] ?? region.toUpperCase(),
-          articles: ranked,
-          interpretiveSummary,
-          isNominal,
-          structuredAssessment,
-          lastCollectionAt,
-        };
-      }),
-    );
+          top,
+        ).catch((err) => {
+          logger.error('Structured assessment failed — falling back to plain summary', err instanceof Error ? err : new Error(String(err)), { region });
+          return undefined;
+        });
+        // Fallback plain summary if structured call fails
+        if (!structuredAssessment) {
+          interpretiveSummary = await this.generateSectionSummaryFallback(
+            region,
+            top.map((a) => ({ title: a.title, outletName: a.outletName, summary: a.summary })),
+          );
+        }
+      }
+
+      sections.push({
+        region,
+        label: SECTION_LABELS[region] ?? region.toUpperCase(),
+        articles: ranked,
+        interpretiveSummary,
+        isNominal,
+        ...(structuredAssessment !== undefined ? { structuredAssessment } : {}),
+        ...(lastCollectionAt !== undefined ? { lastCollectionAt } : {}),
+      });
+    }
 
     const crossSectorAnalysis = await this.generateCrossSectorAnalysis(sections);
 
