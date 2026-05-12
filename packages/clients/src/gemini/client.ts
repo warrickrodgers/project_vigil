@@ -16,6 +16,11 @@ const BACKOFF_MS = [1000, 3000, 9000] as const;
 // matches Gemini's observed retry-after header for 429/503 responses.
 const CAPABLE_BACKOFF_MS = [4000, 12000, 24000] as const;
 
+// Gemini occasionally wraps JSON in markdown fences despite being told not to.
+function stripFences(text: string): string {
+  return text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -216,15 +221,15 @@ export class GeminiClient {
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(raw);
+      parsed = JSON.parse(stripFences(raw));
     } catch {
       // Retry once with correction prompt
-      logger.warn('completeJSON: invalid JSON response, retrying with correction', { label });
+      logger.warn('completeJSON: invalid JSON response, retrying with correction', { label, raw: raw.slice(0, 200) });
       const corrected = await this.complete(
         `Your previous response was not valid JSON. Here was your response:\n${raw}\n\nFix it and return ONLY valid JSON with no extra text.`,
         { ...baseOpts, label: `${label}-correction` }
       );
-      parsed = JSON.parse(corrected);
+      parsed = JSON.parse(stripFences(corrected));
     }
 
     return options.schema.parse(parsed) as T;

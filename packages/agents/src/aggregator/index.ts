@@ -41,6 +41,8 @@ const FLASH_MIN_TRUST = 0.6;
 const FLASH_MAX_ITEMS = 5;
 /** Sections where all articles are older than this are rendered as NOMINAL. */
 const NOMINAL_STALENESS_HOURS = 18;
+/** Delay between per-section Gemini assessment calls to avoid rate-limit bursts. */
+const INTER_SECTION_DELAY_MS = 1000;
 
 // ---------------------------------------------------------------------------
 // AggregatorAgent
