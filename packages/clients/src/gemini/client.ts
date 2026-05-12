@@ -215,6 +215,7 @@ export class GeminiClient {
       temperature,
       label,
       ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
+      ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
     } satisfies CompleteOptions;
 
     const raw = await this.complete(jsonPrompt, baseOpts);

@@ -14,5 +14,6 @@ export interface CompleteJSONOptions<T> {
   systemPrompt?: string;
   schema: z.ZodSchema<T>;
   temperature?: number;
+  maxTokens?: number;
   label?: string;
 }

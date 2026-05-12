@@ -327,6 +327,7 @@ Return a single JSON object with keys: situation, assessment, confidence, confid
         tier: 'capable',
         schema: StructuredAssessmentSchema,
         label: `structured-assessment-${region}`,
+        maxTokens: 4096,
       },
     );
 
@@ -411,7 +412,7 @@ Today's sector intelligence:
 ${sectionSummaries}
 
 Return JSON: { "crossSectorAnalysis": "<4-5 sentence synthesis>" }`,
-        { tier: 'capable', schema: CrossSectorSchema, label: 'cross-sector-analysis' },
+        { tier: 'capable', schema: CrossSectorSchema, label: 'cross-sector-analysis', maxTokens: 2048 },
       );
       return (result as { crossSectorAnalysis: string }).crossSectorAnalysis;
     } catch (err) {
