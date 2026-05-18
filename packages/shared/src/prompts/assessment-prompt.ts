@@ -1,4 +1,4 @@
-import { ANALYST_VOICE_DIRECTIVE, PROHIBITED_PHRASES } from './analyst-voice.js';
+import { ANALYST_VOICE_DIRECTIVE, PROBABILITY_DISCIPLINE_RULES, PROHIBITED_PHRASES } from './analyst-voice.js';
 import { formatProbabilityTableForPrompt, formatConfidenceFrameworkForPrompt } from '../probability.js';
 
 /**
@@ -8,6 +8,7 @@ import { formatProbabilityTableForPrompt, formatConfidenceFrameworkForPrompt } f
 export function buildAnalystSystemPrompt(): string {
   return [
     ANALYST_VOICE_DIRECTIVE,
+    PROBABILITY_DISCIPLINE_RULES,
     formatProbabilityTableForPrompt(),
     formatConfidenceFrameworkForPrompt(),
     PROHIBITED_PHRASES,

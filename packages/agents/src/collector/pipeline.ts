@@ -23,6 +23,47 @@ import type {
 } from './types.js';
 
 // ---------------------------------------------------------------------------
+// Source quality filters
+// ---------------------------------------------------------------------------
+
+const SOURCE_BLOCKLIST = new Set([
+  // Social platforms
+  'youtube.com', 'youtu.be',
+  'twitter.com', 'x.com',
+  'tiktok.com',
+  'reddit.com', 'old.reddit.com',
+  'facebook.com', 'fb.com', 'fb.watch',
+  'instagram.com',
+  'linkedin.com',
+  'pinterest.com',
+  'tumblr.com',
+  'snapchat.com',
+  'twitch.tv',
+  'discord.com', 'discord.gg',
+]);
+
+/** Domains whose trust score is NOT capped in USA/geopolitical regions. */
+const SOURCE_REQUIRELIST = new Set([
+  // Wire services
+  'reuters.com', 'apnews.com',
+  // Major newspapers
+  'nytimes.com', 'washingtonpost.com', 'wsj.com', 'theguardian.com',
+  'ft.com', 'latimes.com', 'chicagotribune.com', 'bostonglobe.com',
+  // Broadcast / public radio
+  'bbc.com', 'bbc.co.uk', 'nbcnews.com', 'cbsnews.com', 'abcnews.go.com',
+  'cnn.com', 'foxnews.com', 'pbs.org', 'npr.org',
+  // Financial / data
+  'bloomberg.com', 'economist.com',
+  // Policy / foreign affairs
+  'foreignpolicy.com', 'foreignaffairs.com', 'cfr.org',
+  // Digital news
+  'politico.com', 'axios.com', 'thehill.com', 'vox.com', 'theatlantic.com',
+  'time.com', 'newsweek.com', 'usatoday.com',
+]);
+
+const REQUIRELIST_TRUST_CAP = 0.45;
+
+// ---------------------------------------------------------------------------
 // Primary source detection
 // ---------------------------------------------------------------------------
 
@@ -49,7 +90,7 @@ function isPrimarySource(domain: string): boolean {
 // ---------------------------------------------------------------------------
 
 const QueryGenerationSchema = z.object({
-  queries: z.array(z.string()).min(1).max(5),
+  queries: z.array(z.string()).min(1).max(8),
 });
 
 const SectorTagEnum = z.enum([
@@ -114,7 +155,7 @@ export class CollectorAgent {
         return result;
       }
 
-      const queries = await this.generateQueries(region);
+      const queries = this.generateQueries(region);
       logger.info('Generated queries', { region, queries });
 
       const searchResults = await this.executeSearches(queries, region, 3, 'basic', config.maxAgeDays);
@@ -238,31 +279,33 @@ export class CollectorAgent {
     return rows as unknown as OutletRecord[];
   }
 
-  private async generateQueries(region: Region): Promise<string[]> {
+  private generateQueries(region: Region): string[] {
     const config = REGION_CONFIGS[region];
-    const today = new Date().toLocaleDateString('en-US', {
-      weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
-    });
-    const result = await this.gemini.completeJSON(
-      `You are an OSINT analyst. Generate exactly 3 Tavily search queries to surface NEW developments from the last 24-48 hours only.
+    const now = new Date();
+    const month = now.toLocaleString('en-US', { month: 'long' });
+    const year = String(now.getFullYear());
+    const day = now.getDate();
+    const states = config.states ?? [];
+    const commodities = config.commodities ?? [];
 
-Today is ${today}. Generate queries that will surface news published TODAY or YESTERDAY only.
-Do NOT generate queries about ongoing situations unless there is a specific new development today or yesterday.
+    const substitute = (template: string): string =>
+      template
+        .replace(/{month}/g, month)
+        .replace(/{year}/g, year)
+        .replace(/{metro}/g, config.metro ?? '')
+        .replace(/{state}/g, states.length > 0 ? states[day % states.length]! : '')
+        .replace(/{commodity}/g, commodities.length > 0 ? commodities[day % commodities.length]! : '');
 
-Region: ${config.displayName}
-Context: ${config.contextPrompt}
-Key topics: ${config.baseTopics.join(', ')}
+    const queries: string[] = [];
+    const { hardNews, influenceMapping, patternDetection, chessboardConnectors } = config.queryTemplates;
 
-Requirements:
-- Each query targets RECENT, BREAKING developments — not background on ongoing situations
-- Queries must be diverse — different angles, not repetitive
-- Include a date hint (e.g. "May 2026" or "this week") in at least one query
-- Phrase them as a news researcher searching for TODAY's news
+    for (const category of [hardNews, influenceMapping, patternDetection, chessboardConnectors]) {
+      const i = day % category.length;
+      queries.push(substitute(category[i]!));
+      queries.push(substitute(category[(i + 1) % category.length]!));
+    }
 
-Return JSON: { "queries": ["query1", "query2", "query3"] }`,
-      { tier: 'fast', schema: QueryGenerationSchema, label: `generate-queries-${region}` },
-    );
-    return result.queries;
+    return queries; // 8 queries total: 2 per category
   }
 
   private async generateScanQueries(region: Region, topic: string): Promise<string[]> {
@@ -384,6 +427,15 @@ Return JSON with all 6 fields.`,
       return false;
     }
 
+    // Extract domain early — needed for blocklist and outlet resolution
+    const domain = this.extractDomain(sr.url);
+
+    // Hard blocklist — reject social/video platforms before any DB or Gemini work
+    if (SOURCE_BLOCKLIST.has(domain)) {
+      logger.info('Article rejected — blocked source domain', { url: sr.url, domain });
+      return false;
+    }
+
     // Hash dedup within current batch and across all time
     const rawBody = sr.rawContent ?? sr.content;
     const hash = computeArticleHash(sr.title, rawBody);
@@ -424,7 +476,6 @@ Return JSON with all 6 fields.`,
     }
 
     // Resolve outlet — AI name first, then domain fallback
-    const domain = this.extractDomain(sr.url);
     let outlet =
       resolveOutlet(geminiResult.outletName, outlets) ??
       resolveOutlet(domain, outlets);
@@ -477,6 +528,9 @@ Return JSON with all 6 fields.`,
       isCorroborated,
     });
 
+    // Apply requirelist trust cap: non-requirelist, non-primary sources in USA/geo are capped at 0.45
+    const effectiveTrustScore = this.applyRequirelistTrustCap(vetting.trustScore, region, domain);
+
     // --review mode: flagged articles go through operator approval
     if (options.review && !vetting.autoApprove && vetting.flag) {
       const approval = await this.emitter.requestApproval(
@@ -489,7 +543,7 @@ Return JSON with all 6 fields.`,
             summary: vetting.summary,
             outlet: outlet.canonicalName,
             biasScore: vetting.biasScore,
-            trustRating: vetting.trustScore,
+            trustRating: effectiveTrustScore,
             region,
             url: sr.url,
           },
@@ -540,7 +594,7 @@ Return JSON with all 6 fields.`,
         rawContent: rawBody,
         outletId: outlet.id,
         biasScore: vetting.biasScore,
-        trustRating: vetting.trustScore,
+        trustRating: effectiveTrustScore,
         region,
         sectorTags: serializeSectorTags(sectorTags),
         vettingFlag: vetting.flag ?? null,
@@ -589,13 +643,20 @@ Return JSON with all 6 fields.`,
     logger.info('Article saved', {
       id: article.id,
       outlet: outlet.canonicalName,
-      trust: vetting.trustScore.toFixed(2),
+      trust: effectiveTrustScore.toFixed(2),
       flag: vetting.flag ?? 'none',
       autoApprove: vetting.autoApprove,
       isCorroborated,
       embedded: embedding !== null,
     });
     return true;
+  }
+
+  private applyRequirelistTrustCap(trustScore: number, region: Region, domain: string): number {
+    if (region === 'local') return trustScore;
+    if (isPrimarySource(domain)) return trustScore;
+    if (SOURCE_REQUIRELIST.has(domain)) return trustScore;
+    return Math.min(trustScore, REQUIRELIST_TRUST_CAP);
   }
 
   private flagReason(

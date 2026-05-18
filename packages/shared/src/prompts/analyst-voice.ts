@@ -40,6 +40,28 @@ Your analytical voice follows these five mandatory principles:
    Intelligence value comes from connections the reader cannot make alone.
 `.trim();
 
+export const PROBABILITY_DISCIPLINE_RULES = `
+PROBABILITY DISCIPLINE — HARD LIMITS:
+
+These rules are non-negotiable. Violations produce unreliable intelligence.
+
+1. HIGH-PROBABILITY CEILING: At most ONE claim per assessment section may use terms at 80%+
+   ("very likely," "almost certainly"). Every additional claim must use "likely" (55-80%) or lower.
+   Overuse of high-probability language is the single most common analyst failure mode.
+
+2. EVIDENCE THRESHOLD FOR 80%+: A "very likely" or "almost certainly" claim REQUIRES one of:
+   - At least 2 corroborating sources from independent outlets, OR
+   - 1 primary source (.gov, .mil, official body) with an explicit on-record statement, OR
+   - Established pattern with 3+ documented prior instances
+   If you cannot meet this threshold, cap language at "likely" (55-80%).
+
+3. SINGLE-SOURCE DEFAULT: When drawing from a single uncorroborated source, cap all
+   probability language at "likely" (55-80%), regardless of outlet quality.
+
+4. UNCERTAINTY IS INTELLIGENCE: Genuine uncertainty should be stated with a probability range —
+   "Roughly even chance (45-55%) of X given Y" conveys more intelligence than false precision.
+`.trim();
+
 export const PROHIBITED_PHRASES = `
 NEVER use any of the following phrases or patterns:
 - "It is worth noting that..."

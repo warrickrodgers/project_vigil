@@ -1,4 +1,4 @@
-import type { Newsletter, DigestSection, NewsletterStats } from './types.js';
+import type { Newsletter, DigestSection, NewsletterStats, ChessboardConnection } from './types.js';
 
 const SECTION_COLORS: Record<string, string> = {
   local: '#4f8ef7',
@@ -221,6 +221,34 @@ function renderSectionHtml(section: DigestSection, generatedAt: Date): string {
   </tr>`;
 }
 
+const CHESSBOARD_GOLD = '#c9a227';
+
+function renderChessboardSectionHtml(connections: ChessboardConnection[]): string {
+  if (connections.length === 0) return '';
+
+  const cards = connections.map((c) => `
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:14px;">
+      <tr>
+        <td bgcolor="#1a1a2e" style="${bg('#1a1a2e')}padding:14px 16px;border-left:3px solid ${CHESSBOARD_GOLD};">
+          <p style="margin:0 0 8px;font-size:12px;font-weight:600;color:${CHESSBOARD_GOLD};font-family:${MONO};">${c.geopoliticalEvent}</p>
+          <p style="margin:0 0 3px;font-size:10px;color:#666;font-family:${MONO};letter-spacing:2px;text-transform:uppercase;">Mechanism</p>
+          <p style="margin:0 0 8px;font-size:12px;color:#c8c8de;line-height:1.6;font-family:${BODY};font-weight:300;">${c.mechanism}</p>
+          <p style="margin:0 0 3px;font-size:10px;color:#666;font-family:${MONO};letter-spacing:2px;text-transform:uppercase;">Local Impact — Kansas City</p>
+          <p style="margin:0 0 8px;font-size:12px;color:#e8e8e8;line-height:1.6;font-family:${BODY};font-weight:300;">${c.localImplication}</p>
+          <p style="margin:0;font-size:11px;color:#888;font-family:${MONO};">⏱ ${c.timeframe} · 📡 Watch: ${c.actionableSignal}</p>
+        </td>
+      </tr>
+    </table>`).join('');
+
+  return `
+  <tr>
+    <td bgcolor="#12121f" style="${bg('#12121f')}padding:18px 20px;border-top:3px solid ${CHESSBOARD_GOLD};">
+      <p style="margin:0 0 12px;font-size:10px;color:${CHESSBOARD_GOLD};font-family:${MONO};letter-spacing:2px;text-transform:uppercase;">♟ Global→Local Intelligence Chessboard</p>
+      ${cards}
+    </td>
+  </tr>`;
+}
+
 function renderStatsHtml(stats: NewsletterStats): string {
   const confDist = stats.confidenceDistribution;
   const totalAssessments = confDist
@@ -289,6 +317,7 @@ export function renderHtmlEmail(newsletter: Newsletter, recipientEmail?: string)
   });
 
   const sections = newsletter.sections.map((s) => renderSectionHtml(s, newsletter.generatedAt)).join('');
+  const chessboard = renderChessboardSectionHtml(newsletter.chessboardConnections ?? []);
   const stats = renderStatsHtml(newsletter.stats);
 
   return `<!DOCTYPE html>
@@ -328,6 +357,9 @@ export function renderHtmlEmail(newsletter: Newsletter, recipientEmail?: string)
         <p style="margin:0;font-size:13px;color:#c8c8de;line-height:1.8;font-family:${BODY};font-weight:300;">${newsletter.crossSectorAnalysis || 'Insufficient data for cross-sector analysis.'}</p>
       </td>
     </tr>
+
+    <!-- CHESSBOARD CONNECTIONS -->
+    ${chessboard}
 
     <!-- STATS -->
     ${stats}
@@ -393,6 +425,17 @@ export function renderPlainText(newsletter: Newsletter): string {
     ? `\nConfidence: HIGH ${confDist.high} · MODERATE ${confDist.moderate} · LOW ${confDist.low} · NOMINAL ${confDist.nominal}`
     : '';
 
+  const chessboardText = (newsletter.chessboardConnections?.length ?? 0) > 0
+    ? [
+        '♟ GLOBAL→LOCAL INTELLIGENCE CHESSBOARD',
+        '─'.repeat(60),
+        ...newsletter.chessboardConnections.map((c, i) =>
+          `${i + 1}. ${c.geopoliticalEvent}\n   Mechanism: ${c.mechanism}\n   KC Impact: ${c.localImplication}\n   Timeframe: ${c.timeframe} · Watch: ${c.actionableSignal}`,
+        ),
+        '',
+      ].join('\n')
+    : '';
+
   return [
     'PROJECT VIGIL — DAILY INTELLIGENCE BRIEF',
     date,
@@ -403,6 +446,7 @@ export function renderPlainText(newsletter: Newsletter): string {
     '─'.repeat(60),
     newsletter.crossSectorAnalysis || 'N/A',
     '',
+    ...(chessboardText ? [chessboardText] : []),
     '📊 SOURCE STATS',
     `Articles: ${newsletter.stats.totalArticles} · Corroborated: ${(newsletter.stats.corroborationRate * 100).toFixed(0)}% · Avg Trust: ${(newsletter.stats.avgTrustRating * 100).toFixed(0)}%${confStats}`,
   ].join('\n');

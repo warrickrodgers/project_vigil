@@ -60,8 +60,6 @@ const SEARCH_RESULT = {
   score: 0.92,
 };
 
-const GEMINI_QUERIES = { queries: ['kansas city transit news', 'KC metro development', 'Missouri infrastructure'] };
-
 /** Unified vetting fixture — 6 fields (no outlet reliability estimate in Phase 2b) */
 const GEMINI_UNIFIED = {
   summary: 'Mayor Q announced a $200M transit expansion covering the KC metro.',
@@ -96,12 +94,15 @@ function makeEmitter(overrides?: Partial<CollectorEmitter>): CollectorEmitter {
   };
 }
 
-/** Default mock: 1st call = query generation, 2nd call = unified vetting */
+/** Default mock: completeJSON dispatches by label — query generation is now sync/template-based, no Gemini call */
 function makeGemini(unifiedResult = GEMINI_UNIFIED) {
   return {
-    completeJSON: vi.fn()
-      .mockResolvedValueOnce(GEMINI_QUERIES)
-      .mockResolvedValueOnce(unifiedResult),
+    completeJSON: vi.fn().mockImplementation((_prompt: unknown, opts: { label?: string }) => {
+      if (opts.label?.startsWith('generate-scan-queries')) {
+        return Promise.resolve({ queries: ['query1', 'query2', 'query3'] });
+      }
+      return Promise.resolve(unifiedResult);
+    }),
     complete: vi.fn(),
     embed: vi.fn().mockResolvedValue(new Array(768).fill(0.1)),
   };
@@ -142,8 +143,8 @@ describe('CollectorAgent', () => {
       expect(result.articlesSaved).toBe(1);
       expect(result.articlesSkipped).toBe(0);
       expect(result.errors).toHaveLength(0);
-      // Only 2 Gemini calls: query generation + unified vetting (no outlet reliability call)
-      expect(gemini.completeJSON).toHaveBeenCalledTimes(2);
+      // Only 1 Gemini call: unified vetting (query generation is now sync template-based)
+      expect(gemini.completeJSON).toHaveBeenCalledTimes(1);
       expect(mockPrisma.article.create).toHaveBeenCalledOnce();
       expect(emitter.sendEmbed).toHaveBeenCalledOnce();
     });
@@ -158,8 +159,8 @@ describe('CollectorAgent', () => {
 
       expect(result.articlesSkipped).toBe(1);
       expect(result.articlesSaved).toBe(0);
-      // Only 1 Gemini call (query generation) — unified vetting skipped for duplicates
-      expect(gemini.completeJSON).toHaveBeenCalledTimes(1);
+      // 0 Gemini calls — dedup hit before vetting, and query generation is now template-based
+      expect(gemini.completeJSON).toHaveBeenCalledTimes(0);
       expect(mockPrisma.article.create).not.toHaveBeenCalled();
     });
 
@@ -213,7 +214,6 @@ describe('CollectorAgent', () => {
       const twoResults = [SEARCH_RESULT, { ...SEARCH_RESULT, url: 'https://reuters.com/article/2', title: 'Second article' }];
       const gemini = {
         completeJSON: vi.fn()
-          .mockResolvedValueOnce(GEMINI_QUERIES)
           .mockRejectedValueOnce(new Error('Gemini 503'))
           .mockResolvedValueOnce(GEMINI_UNIFIED),
         complete: vi.fn(),
@@ -231,22 +231,18 @@ describe('CollectorAgent', () => {
 
     it('deduplicates across multiple queries (same URL from different searches)', async () => {
       const gemini = makeGemini();
-      gemini.completeJSON
-        .mockReset()
-        .mockResolvedValueOnce({ queries: ['q1', 'q2', 'q3'] })
-        .mockResolvedValueOnce(GEMINI_UNIFIED);
       const tavily = {
         search: vi.fn()
-          .mockResolvedValueOnce([SEARCH_RESULT])
-          .mockResolvedValueOnce([SEARCH_RESULT])
-          .mockResolvedValueOnce([]),
+          .mockResolvedValueOnce([SEARCH_RESULT])  // first query returns article
+          .mockResolvedValueOnce([SEARCH_RESULT])  // second query returns same article (dedup target)
+          .mockResolvedValue([]),                  // remaining 6 queries return nothing
       };
 
       const emitter = makeEmitter();
       const agent = new CollectorAgent(gemini as never, tavily as never, emitter, mockPrisma);
       const result = await agent.collect('local');
 
-      expect(result.articlesFound).toBe(1);
+      expect(result.articlesFound).toBe(1); // deduplicated across 8 queries
       expect(result.articlesSaved).toBe(1);
     });
 
@@ -262,6 +258,83 @@ describe('CollectorAgent', () => {
         expect.stringContaining('No outlets found'),
         'ch-local',
       );
+    });
+  });
+
+  describe('collect() — source quality filters', () => {
+    it('rejects blocklisted domains before any Gemini or DB work', async () => {
+      const blockedResult = { ...SEARCH_RESULT, url: 'https://youtube.com/watch?v=abc123' };
+      const gemini = makeGemini();
+      const emitter = makeEmitter();
+      const agent = new CollectorAgent(
+        gemini as never,
+        { search: vi.fn().mockResolvedValue([blockedResult]) } as never,
+        emitter,
+        mockPrisma,
+      );
+
+      const result = await agent.collect('local');
+
+      expect(result.articlesSkipped).toBe(1);
+      expect(gemini.completeJSON).not.toHaveBeenCalled();
+      expect(mockPrisma.article.create).not.toHaveBeenCalled();
+    });
+
+    it('caps trust at 0.45 for non-requirelist source in USA region', async () => {
+      const obscureResult = { ...SEARCH_RESULT, url: 'https://someobscureblog.net/article/1' };
+      mockPrisma.outlet.findFirst.mockResolvedValue(null);
+      mockPrisma.outlet.create.mockResolvedValue({
+        id: 'outlet-new', canonicalName: 'Some Obscure Blog',
+        aliases: '["someobscureblog.net"]', biasAnchor: 0.0, reliabilityBase: 0.8, region: null,
+      });
+      const gemini = makeGemini({ ...GEMINI_UNIFIED, outletName: 'Some Obscure Blog' });
+      const emitter = makeEmitter();
+      const agent = new CollectorAgent(
+        gemini as never,
+        { search: vi.fn().mockResolvedValue([obscureResult]) } as never,
+        emitter,
+        mockPrisma,
+      );
+
+      await agent.collect('usa');
+
+      const createArgs = mockPrisma.article.create.mock.calls[0]?.[0];
+      expect(createArgs?.data.trustRating).toBeLessThanOrEqual(0.45);
+    });
+
+    it('does not cap trust for requirelisted source in USA region', async () => {
+      const reutersResult = { ...SEARCH_RESULT, url: 'https://reuters.com/article/usa-story' };
+      const emitter = makeEmitter();
+      const agent = new CollectorAgent(makeGemini() as never, { search: vi.fn().mockResolvedValue([reutersResult]) } as never, emitter, mockPrisma);
+
+      await agent.collect('usa');
+
+      const createArgs = mockPrisma.article.create.mock.calls[0]?.[0];
+      // Reuters is requirelisted — trust should reflect the outlet's actual score, not be capped
+      expect(createArgs?.data.trustRating).toBeGreaterThan(0.45);
+    });
+
+    it('does not cap trust for any source in local region', async () => {
+      const obscureResult = { ...SEARCH_RESULT, url: 'https://someobscureblog.net/article/1' };
+      mockPrisma.outlet.findFirst.mockResolvedValue(null);
+      mockPrisma.outlet.create.mockResolvedValue({
+        id: 'outlet-new', canonicalName: 'Some Obscure Blog',
+        aliases: '["someobscureblog.net"]', biasAnchor: 0.0, reliabilityBase: 0.8, region: null,
+      });
+      const gemini = makeGemini({ ...GEMINI_UNIFIED, outletName: 'Some Obscure Blog', biasScore: 0.0 });
+      const emitter = makeEmitter();
+      const agent = new CollectorAgent(
+        gemini as never,
+        { search: vi.fn().mockResolvedValue([obscureResult]) } as never,
+        emitter,
+        mockPrisma,
+      );
+
+      await agent.collect('local');
+
+      const createArgs = mockPrisma.article.create.mock.calls[0]?.[0];
+      // No requirelist cap in local region
+      expect(createArgs?.data.trustRating).toBeDefined();
     });
   });
 

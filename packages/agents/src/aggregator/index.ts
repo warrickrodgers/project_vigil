@@ -19,6 +19,7 @@ import { renderHtmlEmail, renderPlainText } from './template.js';
 import type {
   ArticleRow,
   AggregatorEmitter,
+  ChessboardConnection,
   DigestSection,
   Newsletter,
 } from './types.js';
@@ -41,6 +42,10 @@ const FLASH_MIN_TRUST = 0.6;
 const FLASH_MAX_ITEMS = 5;
 /** Sections where all articles are older than this are rendered as NOMINAL. */
 const NOMINAL_STALENESS_HOURS = 18;
+/** Extended lookback used when a NOMINAL section has stale articles. */
+const FALLBACK_LOOKBACK_HOURS = 120; // 5 days
+/** Minimum articles from the 5-day fallback needed to recover a NOMINAL section. */
+const FALLBACK_MIN_ARTICLES = 2;
 /** Delay between per-section Gemini assessment calls to avoid rate-limit bursts. */
 const INTER_SECTION_DELAY_MS = 1000;
 
@@ -95,7 +100,6 @@ export class AggregatorAgent {
     // Sections are built sequentially (not in parallel) to avoid 503s on the capable
     // tier: geopolitical runs third and was consistently hitting rate limits when all
     // three generateStructuredAssessment calls fired at once.
-    const INTER_SECTION_DELAY_MS = 15_000;
     const sections: DigestSection[] = [];
     for (let i = 0; i < REGIONS.length; i++) {
       const region = REGIONS[i]!;
@@ -103,15 +107,38 @@ export class AggregatorAgent {
       if (i > 0 && this.interSectionDelayMs > 0) await sleep(this.interSectionDelayMs);
 
       const regionArticles = articles.filter((a) => a.region === region);
-      const ranked = rankArticles(regionArticles, nowMs);
-      const top = ranked.slice(0, 4);
+      let ranked = rankArticles(regionArticles, nowMs);
+      let top = ranked.slice(0, 4);
 
       // NOMINAL detection: fewer than 2 fresh articles → silence is more credible than repetition
       const nominalCutoffMs = NOMINAL_STALENESS_HOURS * 60 * 60 * 1000;
       const freshCount = top.filter(
         (a) => nowMs - new Date(a.collectedAt).getTime() <= nominalCutoffMs,
       ).length;
-      const isNominal = top.length === 0 || freshCount < 2;
+      let isNominal = top.length === 0 || freshCount < 2;
+
+      // NOMINAL recovery: if stale articles exist, extend to 5-day lookback and re-rank.
+      // Only fires when top.length > 0 — genuinely empty regions stay NOMINAL.
+      if (isNominal && top.length > 0) {
+        logger.info('NOMINAL section — attempting 5-day fallback', {
+          region, freshCount, articleCount: top.length,
+        });
+        const fallbackCutoff = new Date(nowMs - FALLBACK_LOOKBACK_HOURS * 60 * 60 * 1000);
+        const fallbackRaw = await this.fetchArticles(fallbackCutoff, region);
+        const fallbackRanked = rankArticles(fallbackRaw, nowMs);
+        if (fallbackRanked.length >= FALLBACK_MIN_ARTICLES) {
+          ranked = fallbackRanked;
+          top = fallbackRanked.slice(0, 4);
+          isNominal = false;
+          logger.info('NOMINAL fallback succeeded — using 5-day window', {
+            region, articleCount: fallbackRanked.length,
+          });
+        } else {
+          logger.info('NOMINAL fallback insufficient — section remains NOMINAL', {
+            region, fallbackCount: fallbackRanked.length,
+          });
+        }
+      }
 
       const lastCollectionAt =
         top.length > 0 ? new Date(top[0]!.collectedAt) : undefined;
@@ -148,6 +175,7 @@ export class AggregatorAgent {
     }
 
     const crossSectorAnalysis = await this.generateCrossSectorAnalysis(sections);
+    const chessboardConnections = await this.generateChessboardConnections(sections);
 
     // Compute confidence distribution across non-NOMINAL sections
     const confidenceDistribution = this.computeConfidenceDistribution(sections);
@@ -156,6 +184,7 @@ export class AggregatorAgent {
     const newsletter: Newsletter = {
       sections,
       crossSectorAnalysis,
+      chessboardConnections,
       stats,
       generatedAt: new Date(),
       lookbackHours,
@@ -332,6 +361,70 @@ Return a single JSON object with keys: situation, assessment, confidence, confid
     );
 
     return result as StructuredAssessment;
+  }
+
+  private async generateChessboardConnections(sections: DigestSection[]): Promise<ChessboardConnection[]> {
+    const geoSection = sections.find((s) => s.region === 'geopolitical');
+    const usaSection = sections.find((s) => s.region === 'usa');
+
+    // Use all available upstream articles regardless of NOMINAL status — even a single
+    // geopolitical article can yield a meaningful local connection.
+    const geoArticles = geoSection?.articles.slice(0, 3) ?? [];
+    const usaArticles = usaSection?.articles.slice(0, 3) ?? [];
+
+    if (geoArticles.length === 0 && usaArticles.length === 0) return [];
+
+    const { z } = await import('zod');
+    const ChessboardConnectionSchema = z.object({
+      geopoliticalEvent: z.string().max(200),
+      mechanism: z.string().max(300),
+      localImplication: z.string().max(300),
+      timeframe: z.string().max(100),
+      actionableSignal: z.string().max(200),
+    });
+    const ChessboardConnectionsSchema = z.object({
+      connections: z.array(ChessboardConnectionSchema).min(1).max(3),
+    });
+
+    const geoLines = geoArticles.map((a) => `- ${a.title}: ${a.summary}`).join('\n');
+    const usaLines = usaArticles.map((a) => `- ${a.title}: ${a.summary}`).join('\n');
+
+    try {
+      const result = await this.gemini.completeJSON(
+        `You are an intelligence analyst tracing global-to-local intelligence connections.
+
+Identify 2-3 specific ways the geopolitical or national events below cascade to Kansas City metro implications. Trace the full causal chain from the triggering event to concrete KC impact.
+
+Geopolitical events:
+${geoLines || '(NOMINAL — no new developments)'}
+
+National events:
+${usaLines || '(NOMINAL — no new developments)'}
+
+For each connection provide:
+- geopoliticalEvent: The specific triggering event
+- mechanism: The causal chain (e.g., "tariff → supply chain disruption → KC manufacturing layoffs")
+- localImplication: Specific KC metro impact (name neighborhoods, corridors, industries, or populations)
+- timeframe: When the impact arrives (e.g., "next 30 days", "Q3 2026", "immediate")
+- actionableSignal: The specific indicator confirming this connection materializes
+
+Return JSON: { "connections": [ { "geopoliticalEvent": "...", "mechanism": "...", "localImplication": "...", "timeframe": "...", "actionableSignal": "..." } ] }`,
+        {
+          tier: 'capable',
+          schema: ChessboardConnectionsSchema,
+          label: 'chessboard-connections',
+          maxTokens: 2048,
+        },
+      );
+      const connections = (result as { connections?: ChessboardConnection[] }).connections;
+      return Array.isArray(connections) ? connections : [];
+    } catch (err) {
+      logger.error(
+        'Failed to generate chessboard connections',
+        err instanceof Error ? err : new Error(String(err)),
+      );
+      return [];
+    }
   }
 
   private async generateSectionSummaryFallback(
@@ -544,6 +637,7 @@ Return JSON: { "crossSectorAnalysis": "<4-5 sentence synthesis>" }`,
         isNominal: true,
       })),
       crossSectorAnalysis: '',
+      chessboardConnections: [],
       stats: {
         totalArticles: 0,
         corroborationRate: 0,

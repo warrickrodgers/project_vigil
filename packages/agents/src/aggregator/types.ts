@@ -51,9 +51,18 @@ export interface NewsletterStats {
   };
 }
 
+export interface ChessboardConnection {
+  geopoliticalEvent: string;
+  mechanism: string;
+  localImplication: string;
+  timeframe: string;
+  actionableSignal: string;
+}
+
 export interface Newsletter {
   sections: DigestSection[];
   crossSectorAnalysis: string;
+  chessboardConnections: ChessboardConnection[];
   stats: NewsletterStats;
   generatedAt: Date;
   lookbackHours: number;

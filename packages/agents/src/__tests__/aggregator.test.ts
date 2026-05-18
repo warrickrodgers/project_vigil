@@ -68,6 +68,14 @@ function makeMockPrisma(articles: unknown[] = []) {
   };
 }
 
+const MOCK_CHESSBOARD_CONNECTION = {
+  geopoliticalEvent: 'EU-China trade summit collapses',
+  mechanism: 'Tariff escalation → supply chain disruption → KC manufacturing slowdown',
+  localImplication: 'KC auto parts suppliers on the 435 corridor face reduced orders by Q3',
+  timeframe: 'next 60 days',
+  actionableSignal: 'Watch for Ford/GM supplier announcements in June',
+};
+
 const MOCK_STRUCTURED_ASSESSMENT = {
   situation: 'Mayor Q approved $200M BRT expansion; groundbreak Q3 2026.',
   assessment: 'Likely to proceed on schedule given Federal match secured.',
@@ -88,6 +96,9 @@ function makeGemini() {
       }
       if (opts?.label === 'cross-sector-analysis') {
         return Promise.resolve({ crossSectorAnalysis: 'Cross-sector patterns detected.' });
+      }
+      if (opts?.label === 'chessboard-connections') {
+        return Promise.resolve({ connections: [MOCK_CHESSBOARD_CONNECTION] });
       }
       return Promise.resolve({});
     }),
@@ -255,6 +266,44 @@ describe('AggregatorAgent', () => {
       expect(prompt).toContain('downstream');
     });
 
+    it('generates chessboard connections when upstream (geo/usa) content is available', async () => {
+      const articles = [
+        makeArticleRow({ region: 'local', title: 'KC transit vote' }),
+        makeArticleRow({ region: 'usa', title: 'Senate infrastructure bill', url: 'https://apnews.com/senate' }),
+        makeArticleRow({ region: 'geopolitical', title: 'EU-China trade summit', url: 'https://reuters.com/eu-china' }),
+      ];
+      const db = makeMockPrisma(articles);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
+
+      const result = await agent.digest(24);
+
+      expect(result.chessboardConnections).toHaveLength(1);
+      expect(result.chessboardConnections[0]!.geopoliticalEvent).toContain('EU-China');
+
+      const chessCalls = gemini.completeJSON.mock.calls.filter(([, opts]) =>
+        (opts as { label?: string })?.label === 'chessboard-connections',
+      );
+      expect(chessCalls).toHaveLength(1);
+    });
+
+    it('skips chessboard connections when geo and usa have no articles', async () => {
+      // Only local articles — geo and usa sections will have zero ranked articles
+      const articles = [
+        makeArticleRow({ region: 'local' }),
+        makeArticleRow({ region: 'local', url: 'https://kansascity.com/2', title: 'KC transit detail' }),
+      ];
+      const db = makeMockPrisma(articles);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
+
+      const result = await agent.digest(24);
+
+      expect(result.chessboardConnections).toHaveLength(0);
+      const chessCalls = gemini.completeJSON.mock.calls.filter(([, opts]) =>
+        (opts as { label?: string })?.label === 'chessboard-connections',
+      );
+      expect(chessCalls).toHaveLength(0);
+    });
+
     it('continues if Gemini section assessment throws', async () => {
       gemini.completeJSON.mockImplementation((_prompt: string, opts: { label?: string }) => {
         const label = (opts as { label?: string })?.label ?? '';
@@ -270,6 +319,29 @@ describe('AggregatorAgent', () => {
       const result = await agent.digest(24);
       expect(result.sections[0]!.interpretiveSummary).toBe('');
       expect(result.crossSectorAnalysis).toBe('Analysis.');
+    });
+
+    it('recovers NOMINAL section via 5-day fallback when stale articles exist', async () => {
+      // Articles that are 20h old (> 18h NOMINAL threshold) — stale but exist
+      const staleDate = new Date(Date.now() - 20 * 60 * 60 * 1000);
+      const stale1 = makeArticleRow({ region: 'local', collectedAt: staleDate });
+      const stale2 = makeArticleRow({
+        region: 'local', collectedAt: staleDate,
+        url: 'https://kansascity.com/2', title: 'KC transit detail',
+      });
+      // Mock returns same articles for both initial and fallback queries
+      const db = makeMockPrisma([stale1, stale2]);
+      const agent = new AggregatorAgent(gemini as never, emitter, db as never, { interSectionDelayMs: 0 });
+
+      const result = await agent.digest(24);
+
+      const localSection = result.sections.find((s) => s.region === 'local');
+      // 2 stale articles found in 5-day window → NOMINAL recovered
+      expect(localSection!.isNominal).toBe(false);
+      const assessmentCall = gemini.completeJSON.mock.calls.find(([, opts]) =>
+        (opts as { label?: string })?.label === 'structured-assessment-local',
+      );
+      expect(assessmentCall).toBeDefined();
     });
 
     it('uses lookbackHours to set the DB query cutoff', async () => {

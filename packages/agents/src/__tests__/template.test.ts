@@ -47,6 +47,7 @@ function makeNewsletter(overrides: Partial<Newsletter> = {}): Newsletter {
       },
     ],
     crossSectorAnalysis: 'Infrastructure spending trends connect local and national developments.',
+    chessboardConnections: [],
     stats: {
       totalArticles: 2,
       corroborationRate: 0.5,
@@ -56,6 +57,7 @@ function makeNewsletter(overrides: Partial<Newsletter> = {}): Newsletter {
     },
     generatedAt: new Date('2026-04-22T06:00:00Z'),
     lookbackHours: 24,
+    ...overrides,
   };
 }
 
@@ -127,6 +129,28 @@ describe('renderHtmlEmail()', () => {
     // generatedAt=2026-04-22T06:00Z, publishedAt=2026-04-22T05:00Z → same day
     expect(html).not.toContain('days ago');
     expect(html).not.toContain('yesterday');
+  });
+
+  it('renders chessboard section when connections are present', () => {
+    const newsletter = makeNewsletter({
+      chessboardConnections: [{
+        geopoliticalEvent: 'EU tariff escalation on steel',
+        mechanism: 'Tariff → US steel price increase → KC manufacturing cost rise',
+        localImplication: 'KC auto parts suppliers on 435 corridor face margin compression',
+        timeframe: 'next 60 days',
+        actionableSignal: 'Watch steel futures and Ford supplier announcements',
+      }],
+    });
+    const html = renderHtmlEmail(newsletter);
+    expect(html).toContain('Global→Local Intelligence Chessboard');
+    expect(html).toContain('EU tariff escalation on steel');
+    expect(html).toContain('435 corridor');
+    expect(html).toContain('next 60 days');
+  });
+
+  it('omits chessboard section when connections array is empty', () => {
+    const html = renderHtmlEmail(makeNewsletter());
+    expect(html).not.toContain('Chessboard');
   });
 });
 
